@@ -1,0 +1,10 @@
+
+
+El 4 de Agosto de 2021 decidieron no publicar más los recuperados. No voy a actualizar el dashboard.
+https://github.com/CSSEGISandData/COVID-19/issues/4465
+
+
+
+
+Para resolver sistemas de ecuaciones diferenciales con R
+https://rpubs.com/dsfernandez/422937

@@ -1,0 +1,5267 @@
+---
+title: "COVID-19 Eric's Dashboard"
+#author: "Eric Cabrera Estupinan"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    social: ["twitter", "facebook", "menu"]
+    source_code: embed
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+rm(list=ls()) #clean up the memory
+library(ggplot2)
+library(tidyverse)
+library(flexdashboard)
+library(knitr)
+library(htmlwidgets)
+library(DT)
+library(tibble)
+library(dplyr)
+library(highcharter)
+library(RColorBrewer)
+library(viridis)
+library(tidyr)
+library(xts)
+library(lubridate)
+library(sf)
+library(leaflet)
+library(prophet)
+library(shiny)
+library(dygraphs)
+library(broom)
+library(deSolve)
+library(fs)
+```
+
+```{r}
+row_data2<-read.csv("data/single_nations.csv", header = T)
+row_data2$iso_code<-as.character(row_data2$iso_code)
+row_data2$country<-as.character(row_data2$country)
+##-----------------------------------------------------------------------------------
+
+#Load local Maps data
+#------------------------
+load("data/Countries.RData")
+#------------------------
+
+##Load from local "row_data1" and "row_data2" just for testing
+row_data1<-read_csv("data/row_data1.csv", col_types = cols())
+row_data1<-row_data1[ ,2:9]
+#------------------------------
+
+#daily_data_update
+#-----------------------------------------------------------------------------------
+curr_date<-(row_data1[max(which(row_data1$iso_code==c("ABW"))), 2])    
+curr_date<-as.character(curr_date$date)      #Year-month-day
+
+min_date<-(row_data1[1, 2])
+min_date<-as.character(min_date$date)
+max_date<-curr_date
+#-----------------------------------------------------------------------------------
+
+## merge bouth tables --------------------------------------
+data1<-left_join(row_data1,row_data2,by="iso_code")
+#-----------------------------------------------------------
+## Remove unused variables----------------------------------
+rm(total_cases, total_deaths, total_recovered, row_data1, count_codes)
+#-----------------------------------------------------------
+
+data1<- data1[ , c("iso_code", "country", "date", "total_cases", "total_deaths", "total_recovered", "new_cases", "new_deaths", "new_recovered", "year", "gdp_percap", "life_expect", "population","region","income")]
+
+data1<- data1 %>% 
+  group_by(country) %>% 
+  mutate(CFR=round((total_deaths/total_cases)*100, digits = 2), 
+         CRR=round((total_recovered/total_cases)*100, digits = 2),
+         factor1=round((total_cases*100000)/population, digits = 2),
+         factor2=round((total_deaths*100000)/population, digits = 2),
+         factor3=round((total_recovered*100000)/population, digits=2)) %>% 
+  ungroup()
+
+data1$new_deaths<- if_else(data1$new_deaths<0, 0, data1$new_deaths) 
+data1$new_recovered<- if_else(data1$new_recovered<0, 0, data1$new_recovered) 
+data1$new_cases<- if_else(data1$new_cases<0, 0, data1$new_cases) 
+```
+
+World data
+======================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+
+```{r select-input27}
+
+dateInput(inputId = 'si_world', 
+          label = 'Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+Row
+---------------------------------------------------------------------------------------
+
+### **Updated**
+
+```{r}
+
+valueBox(paste(curr_date),
+         color="warning")
+```
+
+### **Total confirmed cases** 
+
+```{r}
+renderValueBox({
+
+date_w<-input$si_world
+valueBox(data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(total_cases)),
+         icon = "fa-users")
+})
+```
+
+### **New confirmed cases**
+
+```{r}
+renderValueBox({
+
+date_w<-input$si_world  
+valueBox(data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(new_cases)),
+         icon = "fa-ambulance")
+})  
+```
+
+### **Total confirmed deaths**
+
+```{r}
+renderValueBox({
+
+date_w<-input$si_world  
+valueBox(data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(total_deaths)),
+         icon = "fa-hospital",
+         color="red")
+})
+```
+
+### **New confirmed deaths**
+
+```{r}
+renderValueBox({
+  
+date_w<-input$si_world 
+valueBox(data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(new_deaths)),
+         icon = "fa-hospital",
+         color="red")
+})  
+```
+
+### **Total confirmed recovered**
+
+```{r}
+renderValueBox({
+
+date_w<-input$si_world   
+valueBox(data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(total_recovered)),
+         icon = "fa-heartbeat",
+         color="green")
+})
+```
+
+### **New confirmed recovered**
+
+```{r}
+renderValueBox({
+  
+date_w<-input$si_world  
+valueBox(data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(new_recovered)),
+         icon = "fa-heartbeat",
+         color="green")
+})
+```
+
+Row
+---------------------------------------------------------------------------------------
+
+### **World Case Fatality Rate CFR (%)**
+
+```{r}
+renderGauge({
+
+date_w<-input$si_world  
+f1<-data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(total_cases))
+
+f2<-data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(total_deaths))
+
+let<-as.numeric((f2/f1)*100)
+gauge(round(let,
+            digits = 2),
+            min=0,
+            max=10,
+            gaugeSectors(success = c(0, 3),
+                         warning=c(3, 7),
+                         danger=c(7, 10),
+                         colors=c('green', 'yellow', 'red')))
+})
+```
+
+
+### **World Case Recovered Rate CRR (%)**
+
+```{r}
+renderGauge({  
+  
+date_w<-input$si_world   
+f1<-data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(total_cases))
+f3<-data1 %>%
+           filter(date==date_w) %>%
+           summarise(sum(total_recovered))
+
+recov<-as.numeric((f3/f1)*100)
+gauge(round(recov,
+            digits = 2),
+            min=0,
+            max=100,
+            gaugeSectors(success = c(60, 100),
+                         warning=c(30, 60),
+                         danger=c(0, 30),
+                         colors=c('green', 'yellow', 'red')))
+})
+```
+
+
+Row {.tabset .tabset-fade}
+---------------------------------------------------------------------------------------
+
+### **Cumulative variables TS**
+
+```{r}
+
+ all_data_variable<- data1 %>% 
+   select(date, total_cases, total_deaths, total_recovered)
+ 
+all_data_variable<- all_data_variable %>% 
+  group_by(date) %>% 
+  summarise(total_cases=sum(total_cases),
+            total_deaths=sum(total_deaths),
+            total_recovered=sum(total_recovered)) 
+ 
+#cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+cols <- c(brewer.pal(7, "Set1"),"black")
+
+highchart (type="stock") %>%
+  hc_add_series(data=all_data_variable,
+                name="Deaths",
+                type="area", 
+                hcaes(x=date, y=total_deaths)) %>%    
+  hc_add_series(data=all_data_variable, 
+                name="Cases",
+                type="area", 
+                hcaes(x=date, y=total_cases)) %>% 
+  hc_add_series(data=all_data_variable,
+                name="Recovered",
+                type="area", 
+                hcaes(x=date, y=total_recovered)) %>%
+hc_title(text="Cumulative total confirmed: CASES, DEATHS and RECOVERED in the world, (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+  hc_exporting(enabled = TRUE,
+               filename="World_cummulative_Variables", 
+               formAttribute=list(target="_black"), 
+               buttons=list(contextButton=list(text="Export", 
+                                               theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = "normal",
+                                marker = list(enabled = FALSE, symbol = "circle", size=1,
+                                              states = list(hover = list(enabled = TRUE))),
+                                lineWidth = 1,
+                                lineColor="black")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed cases, deaths and recovered"),
+         type="number",
+         labels=list(format= "{value:,.0f}"),
+         opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+           crosshairs=TRUE,
+           borderWidth = 2,
+           bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,
+```
+
+### **New variables TS**
+
+```{r}
+
+data_new_var<- data1 %>% 
+  group_by(date) %>% 
+  summarise(sum_new_cas=sum(new_cases, na.rm=TRUE), 
+            sum_new_deaths=sum(new_deaths, na.rm=TRUE), 
+            sum_new_recov=sum(new_recovered, na.rm=TRUE))
+
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+  
+  hc_add_series(data=data_new_var,
+                name="New deaths",
+                type="area", 
+                fillColor = "rgba(255, 0, 0, 0.2)",
+                hcaes(x=date, y=sum_new_deaths)) %>%    
+  hc_add_series(data=data_new_var, 
+                name="New cases",
+                type="area",
+                fillColor = "rgba(0,105,208,0.38)",
+                hcaes(x=date, y=sum_new_cas)) %>% 
+  hc_add_series(data=data_new_var,
+                name="New recovered",
+                type="area",
+                fillColor = "rgba(0,207,0,0.22)",
+                hcaes(x=date, y=sum_new_recov)) %>%
+hc_title(text="Confirmed new: CASES, DEATHS and RECOVERED in the world, (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>%
+  hc_exporting(enabled = TRUE,
+               filename="World_daily_Variables", 
+               formAttribute=list(target="_black"), 
+               buttons=list(contextButton=list(text="Export", 
+                                               theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="New Cases, Deaths and Recovered"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,
+```
+
+### **Cumulative variables per million TS**
+
+```{r}
+
+Tot_world_pop<- row_data2 %>% 
+  summarise(Tot_world_peop=sum(population))
+
+ all_data_variable<- data1 %>% 
+   select(date, total_cases, total_deaths, total_recovered)
+
+ num_rows=nrow(all_data_variable)
+ 
+ all_data_variable<-gather(all_data_variable, "Variables", "n", 2:4)
+ 
+ all_data_variable<- all_data_variable %>% 
+   group_by(Variables, date) %>% 
+   summarise(cant_val=sum(n))
+
+
+all_data_variable<-all_data_variable[, c("date", "Variables", "cant_val")]
+world_cum_data<-spread(all_data_variable, "Variables", "cant_val")
+
+world_cum_data<- world_cum_data %>% 
+  mutate(cases_per_million= round((total_cases*1000000)/Tot_world_pop$Tot_world_peop, digits = 2),
+         deaths_per_million= round((total_deaths*1000000)/Tot_world_pop$Tot_world_peop, digits = 2),
+         recovered_per_million= round((total_recovered*1000000)/Tot_world_pop$Tot_world_peop, digits = 2),
+         CFR= round((total_deaths/total_cases)*100, digits = 2),
+         CRR= round((total_recovered/total_cases)*100, digits = 2)) 
+
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+  hc_add_series(data=world_cum_data,
+                name="Deaths per million",
+                type="line", 
+                hcaes(x=date, y=deaths_per_million)) %>%   
+  hc_add_series(data=world_cum_data, 
+                name="Cases per million",
+                type="line", 
+                hcaes(x=date, y=cases_per_million)) %>% 
+  hc_add_series(data=world_cum_data,
+                name="Recovered per million",
+                type="line", 
+                hcaes(x=date, y=recovered_per_million)) %>%
+hc_title(text="Confirmed: CASES, DEATHS and RECOVERED per million of people in the world, (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+  hc_exporting(enabled = TRUE,
+               filename="World_cumulative_variables_per_millions", 
+               formAttribute=list(target="_black"), 
+               buttons=list(contextButton=list(text="Export", 
+                                               theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Cases, Deaths and Recovered per million"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))
+```
+
+### **CFR and CRR TS**
+
+```{r}
+
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+   hc_add_series(data=world_cum_data, 
+                name="CFR",
+                type="line", 
+                hcaes(x=date, y=CFR)) %>% 
+  hc_add_series(data=world_cum_data,
+                name="CRR",
+                type="line", 
+                hcaes(x=date, y=CRR)) %>%
+hc_title(text="Case Fatality Rate CFR and Case Recovered Rate CRR in the world, (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+  hc_exporting(enabled = TRUE,
+               filename="World_CFR_and_CRR", 
+               formAttribute=list(target="_black"), 
+               buttons=list(contextButton=list(text="Export", 
+                                               theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="CFR and CRR"),
+           labels=list(format= "{value:,.0f}%"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))
+```
+
+Summary {data-icon="fa-list" data-orientation=columns data-navmenu="Regions"}
+======================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r}
+
+dateInput(inputId = 'si_reg', 
+          label = ' Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+```{r select-input18}
+
+ selectInput(inputId = 'si_count11', label = 'Select cummulative variable',
+             choices = c("Total Confirmed Cases", "Total Confirmed Deaths", "Total Confirmed Recovered"), 
+             selected = "Total Confirmed Cases", multiple = FALSE)
+```
+
+```{r select-input19}
+
+ selectInput(inputId = 'si_count12', label = 'Select daily variable',
+             choices = c("Daily Confirmed Cases", "Daily Confirmed Deaths", "Daily Confirmed Recovered"), 
+             selected = "Daily Confirmed Cases", multiple = FALSE)
+```
+
+Column {.tabset}
+--------------------------------------------------------------------------------------
+
+### Variables per: **Regions**
+
+```{r}
+
+totcases_reg1<- data1 %>%
+  group_by(region, date) %>%
+  summarize(totcases_cum=sum(total_cases, na.rm=TRUE)) %>% 
+  ungroup()
+
+renderHighchart({
+
+date_reg<-input$si_reg
+#date_reg<- curr_date
+
+Total_reg<- data1 %>% 
+  filter(date==date_reg) %>% 
+  group_by(region) %>% 
+  summarise(totcases_cum_reg=sum(total_cases, na.rm=TRUE),
+            totdeaths_cum_reg=sum(total_deaths, na.rm=TRUE),
+            totrecovered_cum_reg=sum(total_recovered, na.rm=TRUE))
+
+cols<- brewer.pal(7, "Set1")
+
+highchart() %>% 
+hc_chart(type = "column", inverted=TRUE, polar = TRUE) %>%
+hc_plotOptions(column = list(stacking = "normal", borderWidth=0, 
+                             pointPadding=0, groupPadding=0.15)) %>%
+hc_add_series(data=Total_reg$totdeaths_cum_reg,
+              name="Total deaths") %>%   
+hc_add_series(data=Total_reg$totcases_cum_reg,
+              name="Total cases") %>% 
+hc_add_series(data=Total_reg$totrecovered_cum_reg,
+              name="Total recovered") %>% 
+hc_xAxis(categories = Total_reg$region, lineWith=0) %>%
+hc_yAxis(type="number",
+         labels=list(format= "{value:,.0f}")) %>%  
+hc_pane(size= '80%', innerSize='15%', startAngle=0, endAngle=270) %>% 
+
+hc_title(text= paste("Main variables behavior, Regions comparison. Date:", date_reg), 
+          align="left",
+          useHTML=TRUE) %>% 
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+          align="left",
+          useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>% 
+    hc_exporting(enabled = TRUE,
+               filename="Regions_comparison_variables", 
+               formAttribute=list(target="_black"), 
+               buttons=list(contextButton=list(text="Export", 
+                                               theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>% 
+hc_tooltip(outside=TRUE, borderWidth = 2, bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+})
+
+```
+
+Column {.tabset}
+--------------------------------------------------------------------------------------
+
+### **Main variables pie**
+
+```{r, fig.keep='none'}
+
+renderHighchart({
+
+Variab_obj<-input$si_count11 
+#Variab_obj<-"Total Confirmed Cases"
+
+Variab_date<-input$si_reg
+#Variab_date<-curr_date
+
+if (Variab_obj=="Total Confirmed Cases"){
+  Obj_col<-data1$total_cases
+  col_ptos_name="Cases"
+}
+if (Variab_obj=="Total Confirmed Deaths"){
+  Obj_col<-data1$total_deaths
+  col_ptos_name="Deaths"
+}
+if (Variab_obj=="Total Confirmed Recovered"){
+  Obj_col<-data1$total_recovered
+  col_ptos_name="Recovered"
+}
+
+data1_pie<-cbind(data1,Obj_col)
+
+data1_pie<-data1_pie %>%
+  filter(date==Variab_date) %>%
+  group_by(region) %>%
+  summarise(Sum_variab=sum(Obj_col))
+
+data1_pie<- mutate(data1_pie, percent=(Sum_variab/sum(Sum_variab))*100, 
+                   col_ptos="Cases", porciento="Percent")
+
+cols <- brewer.pal(7,"Set1")
+
+hchart(data1_pie, "pie", hcaes(x=region, y=Sum_variab), showInLegend = TRUE) %>% 
+hc_colors(cols) %>%
+hc_title(text= paste(Variab_obj, "per Regions of the World. Date:", Variab_date), 
+          align="left",
+          useHTML=TRUE) %>% 
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+          align="left",
+          useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+    hc_exporting(enabled = TRUE,
+               filename="Main_variables_Pie", 
+               formAttribute=list(target="_black"), 
+               buttons=list(contextButton=list(text="Export", 
+                                               theme=list(fill="transparent")))) %>%  # enable export
+hc_tooltip(borderWidth = 2,
+           bacgroundColor="transparent",
+           pointFormat = "{point.col_ptos}: {point.Sum_variab:.0f}<br> {point.porciento}: {point.percent:.2f}%") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+})  
+
+```
+
+### **Main variables acummulate TS**
+
+```{r, fig.keep='none'}
+
+renderHighchart({
+
+Variab_obj<-input$si_count11 
+#Variab_obj<-"Total Confirmed Cases"
+
+if (Variab_obj=="Total Confirmed Cases"){
+  Obj_col<-data1$total_cases
+  col_ptos_name="Cases"
+}
+if (Variab_obj=="Total Confirmed Deaths"){
+  Obj_col<-data1$total_deaths
+  col_ptos_name="Deaths"
+}
+if (Variab_obj=="Total Confirmed Recovered"){
+  Obj_col<-data1$total_recovered
+  col_ptos_name="Recovered"
+}
+
+data1_ts<-cbind(data1,Obj_col)
+
+ tot_var_reg<- data1_ts %>%
+   group_by(region, date) %>%
+   summarize(totvar_cum=sum(Obj_col, na.rm=TRUE))
+ 
+ totvar_days<- data1_ts %>%
+   group_by(date) %>%
+   summarize(totvarday_cum=sum(Obj_col, na.rm=TRUE))
+ 
+ totvar_days<-mutate(totvar_days, world="World cases")
+ totvar_day1<-tot_var_reg[1:nrow(totvar_days), ]
+ totvar_day1$region<-totvar_days$world
+ totvar_day1$date<-totvar_days$date
+ totvar_day1$totvar_cum<-totvar_days$totvarday_cum
+
+cols <- c(brewer.pal(7, "Set1"),"black")
+
+highchart (type="stock") %>%
+  
+  hc_add_series(data=totvar_day1,
+                name="World",
+                type="line",
+                color= "black",
+                hcaes(x=date, y=totvar_cum)) %>% 
+  hc_add_series(data<-filter(tot_var_reg,region=='East Asia & Pacific'),
+                name="East Asia & Pacific",
+                type="area",
+                hcaes(x=date, y=totvar_cum)) %>%   
+  hc_add_series(data<-filter(tot_var_reg,region=='Europe & Central Asia'),
+                name="Europe & Central Asia",
+                type="area",
+                hcaes(x=date, y=totvar_cum)) %>%
+  hc_add_series(data<-filter(tot_var_reg,region=='Latin America & Caribbean'),
+                name="Latin America & Caribbean",
+                type="area",
+                hcaes(x=date, y=totvar_cum)) %>%  
+  hc_add_series(data<-filter(tot_var_reg,region=='Middle East & North Africa'),
+                name="Middle East & North Africa",
+                type="area",
+                hcaes(x=date, y=totvar_cum)) %>%   
+  hc_add_series(data<-filter(tot_var_reg,region=='North America'),
+                name="North America",
+                type="area",
+                hcaes(x=date, y=totvar_cum)) %>%   
+  hc_add_series(data<-filter(tot_var_reg,region=='South Asia'),
+                name="South Asia",
+                type="area",
+                hcaes(x=date, y=totvar_cum)) %>%   
+  hc_add_series(data<-filter(tot_var_reg,region=='Sub-Saharan Africa'),
+                name="Sub-Saharan Africa",
+                type="area",
+                hcaes(x=date, y=totvar_cum)) %>%   
+hc_title(text=paste(Variab_obj, "by regions of the planet, (Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = "normal",
+                                marker = list(enabled = FALSE, symbol = "circle", size=1,
+                                              states = list(hover = list(enabled = TRUE))),
+                                lineWidth = 1,
+                                lineColor="black")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text=paste(Variab_obj)),
+         type="number",
+         labels=list(format= "{value:,.0f}"),
+         opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+           crosshairs=TRUE,
+           borderWidth = 2,
+           bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_exporting(enabled = TRUE,
+             filename="Regions_variables_Acummulate",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,  
+})
+
+```
+
+### **Main variables daily TS**
+
+```{r, fig.keep='none'}
+
+renderHighchart({
+
+Variab_obj<-input$si_count12 
+#Variab_obj<-"Daily Confirmed Cases"
+
+if (Variab_obj=="Daily Confirmed Cases"){
+  Obj_col1<-data1$new_cases
+  col_ptos_name="Cases"
+}
+if (Variab_obj=="Daily Confirmed Deaths"){
+  Obj_col1<-data1$new_deaths
+  col_ptos_name="Deaths"
+}
+if (Variab_obj=="Daily Confirmed Recovered"){
+  Obj_col1<-data1$new_recovered
+  col_ptos_name="Recovered"
+}
+
+data1_ts1<-cbind(data1,Obj_col1)
+
+var_reg<- data1_ts1 %>%
+  group_by(region, date) %>%
+  summarize(var_day=sum(Obj_col1, na.rm=TRUE))
+
+varnew_days<- data1_ts1 %>%
+  group_by(date) %>%
+  summarize(varnewday_cum=sum(Obj_col1, na.rm=TRUE))
+
+varnew_days<-mutate(varnew_days, region="World cases")
+
+data_spr1<-spread(var_reg, region, var_day)
+data_spr2<-spread(varnew_days, region, varnewday_cum)
+
+Countr_sel<-as.character(c("East Asia & Pacific","Europe & Central Asia",
+                           "Latin America & Caribbean","Middle East & North Africa",
+                           "North America","South Asia", "Sub-Saharan Africa"))
+
+data_xts1<- xts(data_spr1[ ,Countr_sel], order.by=data_spr1$date)    
+data_xts2<- xts(data_spr2[ ,"World cases"], order.by=data_spr2$date)
+
+cols <- brewer.pal(7,"Set1")
+
+hc1<- highchart(type="stock") %>%
+  hc_colors(cols) %>%
+  hc_add_series(data=data_xts2$`World cases` , name = "World cases", color="black") %>%
+  hc_add_series(data=data_xts1$`East Asia & Pacific` , name="East Asia & Pacific") %>%
+  hc_add_series(data=data_xts1$`Europe & Central Asia`, name = "Europe & Central Asia") %>%
+  hc_add_series(data=data_xts1$`Latin America & Caribbean`, name = "Latin America & Caribbean") %>%
+  hc_add_series(data=data_xts1$`Middle East & North Africa`, name = "Middle East & North Africa") %>%
+  hc_add_series(data=data_xts1$`North America`, name = "North America") %>%
+  hc_add_series(data=data_xts1$`South Asia`, name = "South Asia") %>%
+  hc_add_series(data=data_xts1$`Sub-Saharan Africa`, name = "Sub-Saharan Africa") %>%
+hc_title(text=paste(Variab_obj,"by regions of the planet, (Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+  hc_exporting(enabled = TRUE,
+             filename="Regions_variables_Daily",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_plotOptions(series = list(stacking = NULL, fillOpacity=0.1,
+                             marker = list(enabled = FALSE, 
+                                           symbol = "circle",
+                                           states = list(hover = list(enabled = TRUE))),
+                             lineWidth = 2,
+                             fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text=paste(Variab_obj)),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             borderColor = "black",
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/")
+hc1 %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))
+})
+
+```
+
+Pick a region {data-icon="fa-line-chart" data-orientation=rows data-navmenu="Regions"}
+==========================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+
+```{r select-input20}
+
+Region_list_main<-data1 %>% 
+  select(region) %>% 
+  distinct(region)
+
+Region_list_main<-as.character(Region_list_main$region)
+
+ selectInput(inputId = 'si_region_main', 
+             label = ' Select a Region',
+             choices = Region_list_main, 
+             selected = "Latin America & Caribbean")
+```
+
+```{r select-input28}
+
+dateInput(inputId = 'si_reg_1', 
+          label = 'Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+Row
+---------------------------------------------------------------------------------------
+
+### **Updated**
+
+```{r}
+valueBox(paste(curr_date),
+         color="warning")
+```
+
+### **Total confirmed cases** 
+
+```{r}
+renderValueBox({
+
+region_main_sel<-input$si_region_main
+date_reg1<-input$si_reg_1
+valueBox(data1 %>% filter(date==date_reg1) %>% 
+           filter(region==region_main_sel) %>% 
+           summarise(sum(total_cases)),
+         icon = "fa-users")
+})
+```
+
+### **New confirmed cases**
+
+```{r}
+renderValueBox({
+
+region_main_sel<-input$si_region_main  
+date_reg1<-input$si_reg_1
+valueBox(data1 %>% filter(date==date_reg1) %>%
+           filter(region==region_main_sel) %>% 
+           summarise(sum(new_cases)),
+         icon = "fa-ambulance")
+})
+```
+
+### **Total confirmed deaths**
+
+```{r}
+renderValueBox({
+
+region_main_sel<-input$si_region_main 
+date_reg1<-input$si_reg_1
+valueBox(data1 %>% filter(date==date_reg1) %>%
+           filter(region==region_main_sel) %>%
+           summarise(sum(total_deaths)),
+         icon = "fa-hospital",
+         color="red")
+})  
+```
+
+### **New confirmed deaths**
+
+```{r}
+renderValueBox({
+
+region_main_sel<-input$si_region_main
+date_reg1<-input$si_reg_1
+valueBox(data1 %>% filter(date==date_reg1) %>%
+           filter(region==region_main_sel) %>%
+           summarise(sum(new_deaths)),
+         icon = "fa-hospital",
+         color="red")
+})  
+```
+
+### **Total confirmed recovered**
+
+```{r}
+renderValueBox({
+ 
+region_main_sel<-input$si_region_main 
+date_reg1<-input$si_reg_1
+valueBox(data1 %>% filter(date==date_reg1) %>%
+           filter(region==region_main_sel) %>%
+           summarise(sum(total_recovered)),
+         icon = "fa-heartbeat",
+         color="green")
+})  
+```
+
+### **New confirmed recovered**
+
+```{r}
+renderValueBox({
+  
+region_main_sel<-input$si_region_main 
+date_reg1<-input$si_reg_1
+valueBox(data1 %>% filter(date==date_reg1) %>%
+           filter(region==region_main_sel) %>%
+           summarise(sum(new_recovered)),
+         icon = "fa-heartbeat",
+         color="green")
+})
+```
+
+Row
+---------------------------------------------------------------------------------------
+
+### **Region Case Fatality Rate CFR (%)**
+
+```{r}
+renderGauge({
+
+region_main_sel<-input$si_region_main
+date_reg1<-input$si_reg_1
+ff1<-data1 %>%
+  filter(date==date_reg1) %>% 
+  filter(region==region_main_sel) %>%
+  summarise(sum(total_cases))
+
+ff2<-data1 %>%
+  filter(date==date_reg1) %>% 
+  filter(region==region_main_sel) %>%
+  summarise(sum(total_deaths))
+
+let_mainregion<-as.numeric((ff2/ff1)*100)
+gauge(round(let_mainregion,
+            digits = 2),
+            min=0,
+            max=10,
+            gaugeSectors(success = c(0, 3),
+                         warning=c(3, 7),
+                         danger=c(7, 10),
+                         colors=c('green', 'yellow', 'red')))
+})
+```
+
+### **Region Case Recovered Rate CRR (%)**
+
+```{r}
+renderGauge({
+
+region_main_sel<-input$si_region_main 
+date_reg1<-input$si_reg_1
+ff1<-data1 %>%
+  filter(date==date_reg1) %>% 
+  filter(region==region_main_sel) %>%
+  summarise(sum(total_cases))
+
+ff3<-data1 %>% 
+  filter(date==date_reg1) %>% 
+  filter(region==region_main_sel) %>%
+  summarise(sum(total_recovered))
+
+recov_mainregion<-as.numeric((ff3/ff1)*100)
+gauge(round(recov_mainregion,
+            digits = 2),
+            min=0,
+            max=100,
+            gaugeSectors(success = c(60, 100),
+                         warning=c(30, 60),
+                         danger=c(0, 30),
+                         colors=c('green', 'yellow', 'red')))
+})
+```
+
+
+Row {.tabset .tabset-fade}
+---------------------------------------------------------------------------------------
+
+### **Region map**
+```{r}
+
+World_count3=World_count
+
+ for (i in 1:nrow(row_data2)){
+    
+   count_name=as.character(row_data2[i, 2])
+    if (count_name != "Bonaire, Sint Eustatius and Saba"
+     & count_name != "Channel Islands"
+     & count_name != "Guadeloupe"
+     & count_name != "French Guiana"
+     & count_name != "Martinique"
+     & count_name != "Mayotte"
+     & count_name != "West Bank and Gaza"
+     & count_name != "Reunion"){
+      
+   World_count3[which(World_count3$country==count_name), 3]=row_data2[i,9]
+   World_count3[which(World_count3$country==count_name), 4]=row_data2[i,10]
+   World_count3[which(World_count3$country==count_name), 5]=row_data2[i,11]
+ } else {}
+ }     
+
+renderLeaflet({
+ 
+region_main_sel<-input$si_region_main 
+#region_main_sel<-c("Latin America & Caribbean")  
+  
+nf<-which(World_count3$REGION_WB==region_main_sel)
+reg_plot<-World_count3[nf, ]
+
+leaflet(options = leafletOptions(dragging=TRUE,
+                                 minZoom = 2.2,
+                                 maxZoom = 18,
+                                 preferCanvas = TRUE)) %>% 
+  addTiles(group = "OMS (default)") %>%
+  addProviderTiles("CartoDB", group="CartoDB", 
+                   options = providerTileOptions(updateWhenZooming=FALSE,
+                                                 updateWhenIdle = TRUE)) %>% 
+  addPolygons(data = reg_plot,
+               fillColor = "blue", 
+               color = "blue",
+               fillOpacity = .1,
+               label = ~country) %>% 
+  setView(lng = 0, lat=40, zoom= 2.2) %>% 
+  addGraticule(interval = 20, style = list(color = "gray", weight = 1), group="Graticule") %>% 
+  addLayersControl(baseGroups = c("OSM (default)", "CartoDB"),    
+    overlayGroups=c("Graticule"),
+    options = layersControlOptions(collapsed = TRUE)) %>% 
+  addMiniMap(tiles = providers$Esri.WorldStreetMap,
+    toggleDisplay = TRUE) %>% 
+    addScaleBar(position = "bottomright", options = scaleBarOptions(maxWidth = 100, 
+                                                                    metric = TRUE,
+                                                                    updateWhenIdle = TRUE)) %>%
+    addMeasure(position="bottomleft",
+               primaryLengthUnit = "meters",
+               primaryAreaUnit = "sqmeters",
+               activeColor = "#3D535D",
+               completedColor = "#7D4479",
+               localization=de)
+})
+```
+
+### **Cumulative variables TS**
+
+```{r}
+
+ renderHighchart({
+ 
+ region_main_sel<-input$si_region_main 
+#region_main_sel<-c("Latin America & Caribbean")
+ 
+ Main_region_data_var<-data1 %>% 
+   filter(region==region_main_sel) %>%
+   group_by(date) %>% 
+   summarise(total_cases=sum(total_cases), total_deaths=sum(total_deaths), total_recovered=sum(total_recovered))
+#   select(date, country, region, total_cases, total_deaths, total_recovered)
+ 
+ cols <- c(brewer.pal(7, "Set1"),"black")
+ 
+ highchart (type="stock") %>%
+   
+ hc_add_series(data=Main_region_data_var,
+                 name="Deaths",
+                 type="area",
+                 hcaes(x=date, y=total_deaths)) %>% 
+ hc_add_series(data=Main_region_data_var,
+                 name="Cases",
+                 type="area",
+                 hcaes(x=date, y=total_cases)) %>%    
+ hc_add_series(data=Main_region_data_var,
+                 name="Recovered",
+                 type="area",
+                 hcaes(x=date, y=total_recovered)) %>% 
+ hc_title(text=paste("Cumulative total confirmed CASES, DEATHS & RECOVERED in:", region_main_sel,"(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_exporting(enabled = TRUE) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = "normal",
+                                marker = list(enabled = FALSE, symbol = "circle", size=1,
+                                              states = list(hover = list(enabled = TRUE))),
+                                lineWidth = 1,
+                                lineColor="black")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed cases, deaths & recovered"),
+         type="number",
+         labels=list(format= "{value:,.0f}"),
+         opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+           crosshairs=TRUE,
+           borderWidth = 2,
+           bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))
+ })
+```
+
+### **New variables TS**
+
+```{r}
+
+renderHighchart({
+  
+ region_main_sel<-input$si_region_main 
+#region_main_sel<-c("Latin America & Caribbean")
+
+Main_region_data_newvar<-data1 %>% 
+  filter(region==region_main_sel) %>%
+  group_by(date) %>% 
+  summarise(new_cases=sum(new_cases), new_deaths=sum(new_deaths), new_recovered=sum(new_recovered))
+  
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+  hc_add_series(data=Main_region_data_newvar,
+                name="New deaths",
+                type="area",
+                fillColor = "rgba(255, 0, 0, 0.2)",
+                hcaes(x=date, y=new_deaths)) %>%    
+  hc_add_series(data=Main_region_data_newvar, 
+                name="New cases",
+                type="area",
+                fillColor = "rgba(0,105,208,0.38)",
+                hcaes(x=date, y=new_cases)) %>% 
+  hc_add_series(data=Main_region_data_newvar,
+                name="New recovered",
+                type="area",
+                fillColor = "rgba(0,207,0,0.22)",
+                hcaes(x=date, y=new_recovered)) %>%
+hc_title(text=paste("Confirmed new: CASES, DEATHS and RECOVERED in", region_main_sel, "(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+hc_exporting(enabled = TRUE) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="New Cases, Deaths and Recovered"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+
+})
+```
+
+### **Cumulative variables per 100000 inhabitant TS**
+
+```{r}
+
+renderHighchart({
+
+ region_main_sel<-input$si_region_main 
+#region_main_sel<-c("Latin America & Caribbean")
+
+ 
+Main_region_data_inhab<-data1 %>% 
+  filter(region==region_main_sel) %>%
+  group_by(date) %>% 
+  summarise(total_cases=sum(total_cases), 
+            total_deaths=sum(total_deaths), 
+            total_recovered=sum(total_recovered),
+            population=sum(population)) 
+
+Main_region_data_inhab<- Main_region_data_inhab %>% 
+  mutate(factor1=round(((total_cases/population)*100000), digits = 2),
+         factor2=round(((total_deaths/population)*100000), digits = 2),
+         factor3=round(((total_recovered/population)*100000), digits = 2))
+
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+  hc_add_series(data=Main_region_data_inhab,
+                name="Deaths per 100000 inhab",
+                type="line", 
+                hcaes(x=date, y=round(factor2, digits = 2))) %>%    
+  hc_add_series(data=Main_region_data_inhab, 
+                name="Cases per 100000 inhab",
+                type="line", 
+                hcaes(x=date, y=round(factor1, digits = 2))) %>%   
+  hc_add_series(data=Main_region_data_inhab,
+                name="Recovered per 100000 inhab",
+                type="line", 
+                hcaes(x=date, y=round(factor3, digits = 2))) %>%
+hc_title(text=paste("Cumulative total confirmed: CASES, DEATHS and RECOVERED per 100000 inhab in", region_main_sel, "(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+hc_exporting(enabled = TRUE) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Cases, Deaths and Recovered per 100000 inhab"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+```
+ 
+### **CFR and CRR TS**
+
+```{r}
+
+renderHighchart({
+  
+region_main_sel<-input$si_region_main 
+#region_main_sel<-c("Latin America & Caribbean")
+
+Main_count_data_cfr_crr<-data1 %>% 
+  filter(region==region_main_sel) %>%
+  group_by(date) %>% 
+  summarise(total_cases=sum(total_cases), 
+            total_deaths=sum(total_deaths), 
+            total_recovered=sum(total_recovered))
+
+Main_count_data_cfr_crr<- Main_count_data_cfr_crr %>% 
+  mutate(CFR=round(((total_deaths/total_cases)*100), digits = 2),
+         CRR=round(((total_recovered/total_cases)*100), digits = 2))
+  
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+  
+  hc_add_series(data=Main_count_data_cfr_crr, 
+                name="CFR",
+                type="line", 
+                hcaes(x=date, y=round(CFR, digits = 2))) %>% 
+  hc_add_series(data=Main_count_data_cfr_crr,
+                name="CRR",
+                type="line", 
+                hcaes(x=date, y=round(CRR, digits = 2))) %>%
+hc_title(text=paste("Case Fatality Rate CFR and Case Recovered Rate CRR in", region_main_sel,"(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+hc_exporting(enabled = TRUE) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="CFR and CRR"),
+           labels=list(format= "{value:,.0f}%"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+
+})
+```
+
+
+All regions map {data-icon="fa-map-o" data-orientation=columns data-navmenu="Regions"}
+==========================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r select-input}
+
+dateInput(inputId = 'si_1', 
+          label = ' Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+```{r select-input10}
+
+ selectInput(inputId = 'si_count5', label = 'Select variable',
+             choices = c("Total Confirmed Cases", "Total Confirmed Deaths", "Total Confirmed Recovered",
+                         "Case Fatality Rate CFR","Case Recovered Rate CRR", "Cases per million",
+                         "Deaths per million", "Recovered per million"), 
+             selected = "Total Confirmed Cases", multiple = FALSE)
+```
+
+```{r select-input11}
+
+ selectInput(inputId = 'si_count6', label = 'Select Colour Palette',
+             choices = c("Viridis", "Reds", "Blues", "Greens"), 
+             selected = "Viridis", multiple = FALSE)
+```
+
+Column
+------------------------------------------------------------------
+
+### **Regions map** 
+
+```{r}
+
+renderLeaflet({
+
+World_count1=World_count  
+  
+region_map_date<-input$si_1
+#region_map_date<-curr_date
+
+Var_graph_reg<-input$si_count5
+#Var_graph_reg<-"Case Fatality Rate CFR"
+
+Var_col_palette<-input$si_count6
+
+if (Var_col_palette=="Viridis"){
+  Var_col_palette<-c("viridis")
+}
+
+if (Var_graph_reg=="Total Confirmed Cases"){
+World_count1$reg_tot_cases<-as.numeric(NA)  
+}
+if (Var_graph_reg=="Total Confirmed Deaths"){
+World_count1$reg_tot_deaths<-as.numeric(NA) 
+}
+if (Var_graph_reg=="Total Confirmed Recovered"){
+World_count1$reg_tot_recovered<-as.numeric(NA)
+}
+if (Var_graph_reg=="Case Fatality Rate CFR"){
+World_count1$CFR<-as.numeric(NA)
+}
+if (Var_graph_reg=="Case Recovered Rate CRR"){
+World_count1$CRR<-as.numeric(NA)
+}
+if (Var_graph_reg=="Cases per million"){
+World_count1$cases_per_million<-as.numeric(NA)
+}
+if (Var_graph_reg=="Deaths per million"){
+World_count1$deaths_per_million<-as.numeric(NA)
+}
+if (Var_graph_reg=="Recovered per million"){
+World_count1$recov_per_million<-as.numeric(NA)
+}
+
+data_region_covid<-data1 %>% 
+  filter(date==region_map_date) %>% 
+  group_by(region) %>%
+  summarise(suma_cases=sum(total_cases), 
+            suma_deaths=sum(total_deaths), 
+            suma_recov=sum(total_recovered), 
+            suma_populat=sum(population),n())
+
+data_region_covid<-mutate(data_region_covid, 
+                          CFR=(suma_deaths/suma_cases)*100, 
+                          CRR=(suma_recov/suma_cases)*100,
+                          cases_per_million=(suma_cases*1000000)/suma_populat,
+                          deaths_per_million=(suma_deaths*1000000)/suma_populat,
+                          recov_per_million=(suma_recov*1000000)/suma_populat) 
+
+data_region_cont<-select(data1, date, iso_code, country, region) %>%
+  filter(date==region_map_date)
+
+data_region_cont<-left_join(data_region_cont, data_region_covid, by="region")
+
+ for (i in 1:nrow(data_region_cont)){
+    
+   count_name=as.character(data_region_cont[i, 3])
+    if (count_name != "Bonaire, Sint Eustatius and Saba"
+     & count_name != "Channel Islands"
+     & count_name != "Guadeloupe"
+     & count_name != "French Guiana"
+     & count_name != "Martinique"
+     & count_name != "Mayotte"
+     & count_name != "West Bank and Gaza"
+     & count_name != "Reunion"){
+      
+   if (Var_graph_reg=="Total Confirmed Cases"){ 
+   World_count1[which(World_count1$country==count_name), 7]=data_region_cont[i,5]
+   }
+   if (Var_graph_reg=="Total Confirmed Deaths"){   
+   World_count1[which(World_count1$country==count_name), 7]=data_region_cont[i,6]
+   }
+   if (Var_graph_reg=="Total Confirmed Recovered"){   
+   World_count1[which(World_count1$country==count_name), 7]=data_region_cont[i,7]
+   }
+   if (Var_graph_reg=="Case Fatality Rate CFR"){   
+   World_count1[which(World_count1$country==count_name), 7]=round(data_region_cont[i,10], digits = 2)
+   }
+   if (Var_graph_reg=="Case Recovered Rate CRR"){   
+   World_count1[which(World_count1$country==count_name), 7]=round(data_region_cont[i,11], digits = 2)
+   }
+   if (Var_graph_reg=="Cases per million"){   
+   World_count1[which(World_count1$country==count_name), 7]=round(data_region_cont[i,12], digits = 2)
+   }
+   if (Var_graph_reg=="Deaths per million"){   
+   World_count1[which(World_count1$country==count_name), 7]=round(data_region_cont[i,13], digits = 2)
+   }
+   if (Var_graph_reg=="Recovered per million"){   
+   World_count1[which(World_count1$country==count_name), 7]=round(data_region_cont[i,14], digits = 2)
+   }
+ } else {}
+ } 
+   
+#World_count1<-left_join(World_count, data_region_cont, by="country")
+#World_count1<-left_join(World_count, data_region_cont, by="country")
+
+   if (Var_graph_reg=="Total Confirmed Cases"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$reg_tot_cases, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB), 
+                      "<br>", "<b>", "Confirmed Cases: ", "</b>", World_count1$reg_tot_cases)
+      col_obj<-World_count1$reg_tot_cases
+   }
+   if (Var_graph_reg=="Total Confirmed Deaths"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$reg_tot_deaths, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB), 
+                      "<br>", "<b>", "Confirmed Deaths: ", "</b>", World_count1$reg_tot_deaths)
+      col_obj<-World_count1$reg_tot_deaths
+   }
+   if (Var_graph_reg=="Total Confirmed Recovered"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$reg_tot_recovered, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB), 
+                      "<br>", "<b>", "Confirmed Recovered: ", "</b>", World_count1$reg_tot_recovered)
+      col_obj<-World_count1$reg_tot_recovered
+   }
+   if (Var_graph_reg=="Case Fatality Rate CFR"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$CFR, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB),
+                      "<br>", "<b>", "CFR: ", "</b>", World_count1$CFR)
+      col_obj<-World_count1$CFR
+   }
+   if (Var_graph_reg=="Case Recovered Rate CRR"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$CRR, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB), 
+                      "<br>", "<b>", "CRR: ", "</b>", World_count1$CRR)
+      col_obj<-World_count1$CRR
+   }
+   if (Var_graph_reg=="Cases per million"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$cases_per_million, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB), 
+                      "<br>", "<b>", "Cases per million: ", "</b>", World_count1$cases_per_million)
+      col_obj<-World_count1$cases_per_million
+   }
+   if (Var_graph_reg=="Deaths per million"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$deaths_per_million, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB), 
+                      "<br>", "<b>", "Deaths per million: ", "</b>", World_count1$deaths_per_million)
+      col_obj<-World_count1$deaths_per_million
+   }
+   if (Var_graph_reg=="Recovered per million"){ 
+      palnumeric <- colorBin(Var_col_palette, domain = World_count1$recov_per_million, bins=10, pretty=TRUE, alpha = F, reverse = F)
+      popup <- paste0("<b>", "Region: ", "</b>", as.character(World_count1$REGION_WB), 
+                      "<br>", "<b>", "Recovered per million ", "</b>", World_count1$recov_per_million)
+      col_obj<-World_count1$recov_per_million
+   }
+
+World_count1<-cbind(World_count1,col_obj)
+
+leaflet(options = leafletOptions(dragging=TRUE,
+                                 minZoom = 2.2,
+                                 maxZoom = 18,
+                                 preferCanvas = TRUE)) %>% 
+  addTiles(group = "OMS (default)") %>%
+  addProviderTiles("CartoDB", group="CartoDB", 
+                   options = providerTileOptions(updateWhenZooming=FALSE,
+                                                 updateWhenIdle = TRUE)) %>% 
+  setView(lng = 0, lat=40, zoom= 2.2) %>% 
+
+  addPolygons(data=World_count1,
+              color = "#444444" ,
+              weight = 1, 
+              smoothFactor = 0.5,
+              opacity = 1.0,
+              fillOpacity = 0.5,
+              fillColor = ~palnumeric(World_count1$col_obj),    # Color de llenado
+              group = (Var_graph_reg),                  
+              highlightOptions = highlightOptions(color = "white", weight = 2,
+                                                  bringToFront = TRUE), #highlight cuando pasas el cursor
+              label = ~World_count1$REGION_WB,                                  # etiqueta cuando pasas el cursor
+              labelOptions = labelOptions(direction = "auto"),
+              popup = popup) %>%        # mostrar el popup
+          addLegend(position = "bottomleft", pal = palnumeric, values = World_count1$col_obj,
+                    group = (Var_graph_reg),title= (Var_graph_reg), opacity = 1) %>% 
+  addGraticule(interval = 20, style = list(color = "gray", weight = 1), group="Graticule") %>% 
+  addLayersControl(
+    baseGroups = c("OMS (default)", "CartoDB"),
+    overlayGroups = c("Graticule"),    
+    options = layersControlOptions(collapsed = TRUE)) %>% 
+  
+  addMiniMap(tiles = providers$Esri.WorldStreetMap,
+    toggleDisplay = TRUE)%>% 
+    addScaleBar(position = "bottomright", options = scaleBarOptions(maxWidth = 100, 
+                                                                    metric = TRUE,
+                                                                    updateWhenIdle = TRUE))
+})
+
+```
+
+
+Summary {data-icon="fa-list" data-orientation=columns data-navmenu="Countries"}
+======================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r}
+dateInput(inputId = 'si_for_date', 
+          label = ' Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+
+```{r select-input5}
+ list_var<-c("cumulative cases", "cumulative deaths", "cumulative recovered")
+ 
+ selectInput(
+   inputId = 'si_var_a', label = 'Select variable',
+   choices = list_var)
+```
+
+```{r select-input6}
+
+ list_var<-c("treemap", "sunburst")
+
+ selectInput(
+   inputId = 'si_var_b', label = 'Select chart type',
+   choices = list_var)
+```
+
+```{r slider-input6}
+
+max_cases_curr_date<- data1 %>% 
+  filter(date==curr_date)
+
+vect_casos<-max_cases_curr_date[, "total_cases"]  
+max_cas=max(vect_casos)
+
+ sliderInput(inputId = 'sli_6', label = 'Range cummulative CASES',
+             min=0, max=max_cas, value=max_cas)
+```
+
+```{r slider-input7}
+
+max_deaths_curr_date<- data1 %>% 
+  filter(date==curr_date)
+
+vect_deaths<-max_deaths_curr_date[, "total_deaths"]  
+max_det=max(vect_deaths)
+
+ sliderInput(inputId = 'sli_7', label = 'Range cummulative DEATHS',
+             min=0, max=max_det, value=max_det)
+```
+
+```{r slider-input8}
+
+max_recovered_curr_date<- data1 %>% 
+  filter(date==curr_date)
+
+vect_recovered<-max_recovered_curr_date[, "total_recovered"]  
+max_rec=max(vect_recovered)
+
+ sliderInput(inputId = 'sli_8', label = 'Range cummulative RECOVERED',
+             min=0, max=max_rec, value=max_rec)
+```
+
+
+```{r text-input1}
+textInput(inputId= 'text_Id_1', label='"A", bar width for histogram, (Apply to Density bars & frequency Table) Confirmed CASES', value = c("50000"))
+
+```
+
+```{r text-input2}
+textInput(inputId= 'text_Id_2', label='"A", bar width for histogram, (Apply to Density bars & frequency Table) Confirmed DEATHS', value = c("500"))
+
+```
+
+```{r text-input3}
+textInput(inputId= 'text_Id_3', label='"A", bar width for histogram, (Apply to Density bars & frequency Table) Confirmed RECOVERED', value = c("20000"))
+
+```
+
+Row {.tabset .tabset-fade}
+---------------------------------------------------------------------------------------
+
+### **Country & Region charts**
+```{r}
+
+renderHighchart({
+
+date_for_chart<-input$si_for_date
+#date_for_chart<-curr_date
+
+date_variable<-input$si_var_a
+chart_type<-input$si_var_b
+#date_variable<-c("cumulative cases")
+
+Country_chart_data<- data1 %>% 
+  filter(date==date_for_chart)
+
+ if (date_variable=="cumulative cases"){
+       varsize<-"total_cases"
+ } else {}
+
+ if (date_variable=="cumulative deaths"){
+       varsize<-"total_deaths"
+ } else {}
+ if (date_variable=="cumulative recovered"){
+       varsize<-"total_recovered"
+ } else {}
+
+tm<- data_to_hierarchical(data=Country_chart_data,
+                     group_vars = c("region","country"),
+                     size_var = c(varsize),
+                     colors = getOption("highcharter.color_palette"))
+
+hchart(tm, type = chart_type) %>% 
+hc_title(text= paste("Confirmed", date_variable, "by countries and regions,", chart_type,". Date:", date_for_chart), 
+           align="left",
+           useHTML=TRUE) %>% 
+ hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+           align="left",
+           useHTML=TRUE) %>%
+ hc_legend(enabled = TRUE) %>% 
+   hc_exporting(enabled = TRUE,
+             filename="Countries_variables",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(theme=list(fill="transparent")))) %>%  # enable export
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+})
+
+```
+
+Column {.tabset}
+--------------------------------------------------------------------------------------
+
+### **Histogram (IAH)**
+
+```{r, fig.keep='none'}
+
+renderHighchart({
+
+date_for_chart<-input$si_for_date
+#date_for_chart<-curr_date
+
+date_variable<-input$si_var_a
+#date_variable<-c("cumulative cases")
+
+ if (date_variable=="cumulative cases"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_cases)  
+     var_hist<-input$sli_6
+       #varsize1<-"total_cases"
+ } else {}
+
+ if (date_variable=="cumulative deaths"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_deaths) 
+     var_hist<-input$sli_7
+       #varsize1<-"total_deaths"
+ } else {}
+ if (date_variable=="cumulative recovered"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_recovered) 
+     var_hist<-input$sli_8
+       #varsize1<-"total_recovered"
+ } else {}
+
+hist_sel_date = data1 %>%
+  filter(date==date_for_chart) %>% 
+  select(Col_obj)
+
+#hist_sel_date_org<-hist_sel_date
+hist_sel_date<- hist_sel_date %>% 
+  subset(Col_obj<=var_hist)
+
+# datos<-hist_sel_date[, "Col_obj"]
+# datos_org<-rev(sort(datos$Col_obj,decreasing=TRUE))
+
+#------------------------Histogram----------
+hchart(hist_sel_date$Col_obj, 
+       color = "#B71C1C", 
+       name = "Countries frequency") %>% 
+  hc_xAxis(title = list(text=paste("Total confirmed", date_variable)),
+         labels=list(format= "{value:,.0f}")) %>% 
+hc_yAxis(title = list(text="Number of countries (Absolute frequency)"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_title(text=paste("Absolute frequency of confirmed", date_variable, "by countries. Date:", date_for_chart),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="Internal algorithm of Highcharter (IAH) <br> <i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>% 
+hc_legend(enabled = TRUE,
+          align = "right", 
+          verticalAlign = "top",
+          layout = "horizontal") %>%  
+     hc_exporting(enabled = TRUE,
+             filename="Histogram_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(theme=list(fill="transparent")))) %>%  # enable export
+hc_tooltip(crosshairs=TRUE,
+           bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+#---------------------------------------------------------
+
+})
+
+```
+
+### **Density (IAH)**
+
+```{r, fig.keep='none'}
+
+renderHighchart({
+
+date_for_chart<-input$si_for_date
+#date_for_chart<-curr_date
+
+date_variable<-input$si_var_a
+#date_variable<-c("cumulative cases")
+
+ if (date_variable=="cumulative cases"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_cases)
+     var_hist<-input$sli_6
+       #varsize1<-"total_cases"
+ } else {}
+
+ if (date_variable=="cumulative deaths"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_deaths)
+     var_hist<-input$sli_7
+       #varsize1<-"total_deaths"
+ } else {}
+ if (date_variable=="cumulative recovered"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_recovered) 
+     var_hist<-input$sli_8
+       #varsize1<-"total_recovered"
+ } else {}
+
+hist_sel_date = data1 %>%
+  filter(date==date_for_chart) %>% 
+  select(Col_obj)
+
+hist_sel_date<- hist_sel_date %>% 
+  subset(Col_obj<=var_hist)
+
+#------------------------Histogram----------
+hchart(density(hist_sel_date$Col_obj),
+       type ="area",
+       color = "red", 
+       name = "Countries frequency") %>% 
+  hc_xAxis(title = list(text=paste("Total confirmed", date_variable)),
+         labels=list(format= "{value:,.0f}")) %>% 
+hc_yAxis(title = list(text="Density)"),
+           labels=list(format= "{value:,.7f}"),
+           opposite=FALSE) %>%
+hc_title(text=paste("Density of confirmed", date_variable, "by countries. Date:", date_for_chart),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="Internal algorithm of Highcharter (IAH) <br> <i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>% 
+hc_legend(enabled = TRUE,
+          align = "right", 
+          verticalAlign = "top",
+          layout = "horizontal") %>%  
+     hc_exporting(enabled = TRUE,
+             filename="Density_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(theme=list(fill="transparent")))) %>%  # enable export
+hc_tooltip(crosshairs=TRUE,
+           bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+#-------------------------------------------
+})
+
+```
+
+### **Density bars**
+
+```{r}
+
+renderHighchart({
+
+date_for_chart<-input$si_for_date
+#date_for_chart<-curr_date
+
+date_variable<-input$si_var_a
+#date_variable<-c("cumulative cases")
+
+ if (date_variable=="cumulative cases"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_cases) 
+     var_hist<-input$sli_6
+     A<-input$text_Id_1
+     A<-as.numeric(A)
+       #varsize1<-"total_cases"
+ } else {}
+
+ if (date_variable=="cumulative deaths"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_deaths)
+     var_hist<-input$sli_7
+     A<-input$text_Id_2
+     A<-as.numeric(A)
+       #varsize1<-"total_deaths"
+ } else {}
+ if (date_variable=="cumulative recovered"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_recovered)
+     var_hist<-input$sli_8
+     A<-input$text_Id_3
+     A<-as.numeric(A)
+       #varsize1<-"total_recovered"
+ } else {}
+
+hist_sel_date = data1 %>%
+  filter(date==date_for_chart) %>% 
+  select(Col_obj)
+
+hist_sel_date<- hist_sel_date %>% 
+  subset(Col_obj<=var_hist)
+
+datos<-hist_sel_date[, "Col_obj"]
+datos_org<-rev(sort(datos$Col_obj,decreasing=TRUE))
+
+N<-length(datos_org)
+R=max(datos_org)-min(datos_org) #Recorrido o rango
+
+#A=50000
+k=round(R/A)
+L=A*(0:k)
+
+#--------Tabla de frecuencia--------------#
+  L=(0)+A*(0:k) #Extremos de los intervalos
+  x_int=cut(datos_org, breaks=L, right=FALSE, dig.lab=5)
+  intervalos=levels(x_int)
+  marcas=(L[1]+L[2])/2+A*(0:(k-1)) #Marcas de clase
+  f_abs=as.vector(table(x_int)) #Frecuencias absolutas
+  f_rel=round(f_abs/length(datos_org), digits = 3) #Frecuencias relativas
+  f_abs_cum=cumsum(f_abs) #Frecuencias absolutas acumuladas
+  f_rel_cum=round(cumsum(f_rel),digits = 3) #Frecuencias relativas acumuladas
+  Density=f_rel/A #Densidades
+  Density_cum=cumsum(Density) #Densidades acumuladas
+  tabla_x=data.frame(intervalos, marcas, f_abs, f_abs_cum, f_rel, f_rel_cum, Density, Density_cum)
+  #tabla_x
+#------------------------------------------
+
+tabla_densid<-tabla_x
+tabla_densid<-mutate(tabla_densid, Fabs="Abs freq", 
+                     Frela="Rel freq", Intervalo="Interval", Densidad="Density", Density_acum= "Density_cum")
+
+highchart () %>%
+  hc_add_series(data= tabla_densid,
+                type="column",
+                name="Bar density",
+                hcaes(x=marcas, y=Density),
+                color="darkred") %>%
+  hc_add_series(data= tabla_densid,
+                type="spline",
+                name="Area density",
+                hcaes(x=marcas, y=Density),
+                color="#B71C1C") %>%
+hc_xAxis(title = list(text=paste("Total confirmed", date_variable)),
+       labels=list(format= "{value:,.0f}")) %>%
+hc_yAxis(title = list(text="Density"),
+         labels=list(format= "{value:,.7f}"),
+         opposite=FALSE) %>%
+hc_title(text=paste("Density of confirmed", date_variable, "by countries. Date:", date_for_chart),
+         align="left",
+         useHTML=TRUE) %>%
+  hc_subtitle(text="Author's method <br> <i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE,
+          align = "right",
+          verticalAlign = "top",
+          layout = "horizontal") %>%
+hc_exporting(enabled = TRUE,
+             filename="Density_bar_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(theme=list(fill="transparent")))) %>%  # enable export
+hc_tooltip(shared = FALSE,
+           crosshairs=TRUE,
+           bacgroundColor="transparent",
+           pointFormat = "{point.Intervalo}: {point.intervalos}<br> {point.Fabs}: {point.f_abs}<br> {point.Frela}: {point.f_rel}<br> {point.Densidad}: {point.Density}<br>") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+
+})
+
+```
+
+### **Frequency table**
+
+```{r}
+
+renderDT({  
+  
+date_for_chart<-input$si_for_date
+#date_for_chart<-curr_date
+
+date_variable<-input$si_var_a
+#date_variable<-c("cumulative cases")
+
+ if (date_variable=="cumulative cases"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_cases)
+     var_hist<-input$sli_6
+     A<-input$text_Id_1
+     A<-as.numeric(A)
+       #varsize1<-"total_cases"
+ } else {}
+
+ if (date_variable=="cumulative deaths"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_deaths)
+     var_hist<-input$sli_7
+     A<-input$text_Id_2
+     A<-as.numeric(A)
+       #varsize1<-"total_deaths"
+ } else {}
+ if (date_variable=="cumulative recovered"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_recovered)
+     var_hist<-input$sli_8
+     A<-input$text_Id_3
+     A<-as.numeric(A)
+       #varsize1<-"total_recovered"
+ } else {}
+
+hist_sel_date = data1 %>%
+  filter(date==date_for_chart) %>% 
+  select(date, country, Col_obj)
+
+hist_sel_date<- hist_sel_date %>% 
+  subset(Col_obj<=var_hist)
+
+datos<-hist_sel_date[, "Col_obj"]
+datos_org<-rev(sort(datos$Col_obj,decreasing=TRUE))
+
+N<-length(datos_org)
+R=max(datos_org)-min(datos_org) #Recorrido o rango
+
+#A=50000
+k=round(R/A)
+L=A*(0:k)
+
+#--------Tabla de frecuencia--------------#
+  L=(0)+A*(0:k) #Extremos de los intervalos
+  x_int=cut(datos_org, breaks=L, right=FALSE, dig.lab=5)
+  intervalos=levels(x_int)
+  marcas=(L[1]+L[2])/2+A*(0:(k-1)) #Marcas de clase
+  f_abs=as.vector(table(x_int)) #Frecuencias absolutas
+  f_rel=round(f_abs/length(datos_org), digits = 3) #Frecuencias relativas
+  f_abs_cum=cumsum(f_abs) #Frecuencias absolutas acumuladas
+  f_rel_cum=round(cumsum(f_rel),digits = 3) #Frecuencias relativas acumuladas
+  Density=f_rel/A #Densidades
+  Density_cum=cumsum(Density) #Densidades acumuladas
+  tabla_x=data.frame(intervalos, marcas, f_abs, f_abs_cum, f_rel, f_rel_cum, Density, Density_cum)
+  #tabla_x
+#------------------------------------------
+
+tabla_densid<-tabla_x
+tabla_densid<-mutate(tabla_densid, Fabs="Abs freq", 
+                     Frela="Rel freq", Intervalo="Interval", Densidad="Density", Density_acum= "Density_cum")
+ 
+datatable(tabla_x,
+          caption = paste("Total confirmed", date_variable, "frequency table"),
+          rownames = T,
+          filter = "top",
+          extensions= c('Select','Buttons', 'ColReorder', 'KeyTable', 'Responsive', 'Scroller'), 
+          options = list(pageLength=25, 
+                         dom = 'Blfrtip',
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu=list(c(10, 25, 50, -1), c(10, 25, 50, "All")),
+                         colReorder = TRUE),
+ selection = 'none')  
+  
+})
+
+```
+
+### **Cumulative Density**
+```{r}
+
+renderHighchart({
+
+date_for_chart<-input$si_for_date
+#date_for_chart<-curr_date
+
+date_variable<-input$si_var_a
+#date_variable<-c("cumulative cases")
+
+ if (date_variable=="cumulative cases"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_cases)
+     var_hist<-input$sli_6
+     A<-input$text_Id_1
+     A<-as.numeric(A)
+       #varsize1<-"total_cases"
+ } else {}
+
+ if (date_variable=="cumulative deaths"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_deaths)
+     var_hist<-input$sli_7
+     A<-input$text_Id_2
+     A<-as.numeric(A)
+       #varsize1<-"total_deaths"
+ } else {}
+ if (date_variable=="cumulative recovered"){
+     data1<- data1 %>%
+       mutate(Col_obj=total_recovered)
+     var_hist<-input$sli_8
+     A<-input$text_Id_3
+     A<-as.numeric(A)
+       #varsize1<-"total_recovered"
+ } else {}
+
+hist_sel_date = data1 %>%
+  filter(date==date_for_chart) %>% 
+  select(date, country, Col_obj)
+
+hist_sel_date<- hist_sel_date %>% 
+  subset(Col_obj<=var_hist)
+
+datos<-hist_sel_date[, "Col_obj"]
+datos_org<-rev(sort(datos$Col_obj,decreasing=TRUE))
+
+N<-length(datos_org)
+R=max(datos_org)-min(datos_org) #Recorrido o rango
+
+#A=50000
+k=round(R/A)
+L=A*(0:k)
+
+#--------Tabla de frecuencia--------------#
+  L=(0)+A*(0:k) #Extremos de los intervalos
+  x_int=cut(datos_org, breaks=L, right=FALSE, dig.lab=5)
+  intervalos=levels(x_int)
+  marcas=(L[1]+L[2])/2+A*(0:(k-1)) #Marcas de clase
+  f_abs=as.vector(table(x_int)) #Frecuencias absolutas
+  f_rel=round(f_abs/length(datos_org), digits = 3) #Frecuencias relativas
+  f_abs_cum=cumsum(f_abs) #Frecuencias absolutas acumuladas
+  f_rel_cum=round(cumsum(f_rel),digits = 3) #Frecuencias relativas acumuladas
+  Density=f_rel/A #Densidades
+  Density_cum=cumsum(Density) #Densidades acumuladas
+  tabla_x=data.frame(intervalos, marcas, f_abs, f_abs_cum, f_rel, f_rel_cum, Density, Density_cum)
+  #tabla_x
+#------------------------------------------
+
+tabla_densid<-tabla_x
+tabla_densid<-mutate(tabla_densid, Fabs="Abs freq", 
+                     Frela="Rel freq", Intervalo="Interval", Densidad="Density", Density_acum= "Density_cum")
+
+highchart () %>%
+  hc_add_series(data= tabla_densid, 
+                type="line",
+                name="Cumulative Density",
+                hcaes(x=marcas, y=Density_cum),
+                color="#B71C1C") %>% 
+  hc_xAxis(title = list(text=paste("Total confirmed", date_variable)),
+         labels=list(format= "{value:,.0f}")) %>% 
+  hc_yAxis(title = list(text="Cumulative Density"),
+           labels=list(format= "{value:,.7f}"),
+           opposite=FALSE) %>%
+hc_title(text=paste("Cumulative Density of confirmed", date_variable, "by countries. Date:", date_for_chart),  
+         align="left",
+         useHTML=TRUE) %>%
+  hc_subtitle(text="Author's method <br> <i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>% 
+hc_legend(enabled = TRUE,
+          align = "right", 
+          verticalAlign = "top",
+          layout = "horizontal") %>%  
+  hc_exporting(enabled = TRUE,
+             filename="Cumulative_Density",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(theme=list(fill="transparent")))) %>%  # enable export
+hc_tooltip(shared = FALSE,
+           crosshairs=TRUE,
+           bacgroundColor="transparent",
+           pointFormat = "{point.Intervalo}: {point.intervalos}<br> {point.Density_acum}: {point.Density_cum}<br> ") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+})
+```
+
+
+
+Pick a country {data-icon="fa-line-chart" data-orientation=rows data-navmenu="Countries"}
+==========================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+
+```{r select-input4}
+count_list_main<-data1 %>% select(country) %>% distinct(country)
+ count_list_main<-as.character(count_list_main$country)
+ 
+ selectInput(
+   inputId = 'si_count_main', label = ' Select a Country',
+   choices = count_list_main, selected = "US")
+```
+
+```{r select-input29}
+
+dateInput(inputId = 'si_reg_2', 
+          label = 'Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+Row
+---------------------------------------------------------------------------------------
+
+### **Updated**
+
+```{r}
+valueBox(paste(curr_date),
+         color="warning")
+```
+
+### **Total confirmed cases** 
+
+```{r}
+renderValueBox({
+
+country_main_sel<-input$si_count_main
+date_count<-input$si_reg_2
+valueBox(data1 %>% filter(date==date_count) %>% 
+           filter(country==country_main_sel) %>% 
+           summarise(sum(total_cases)),
+         icon = "fa-users")
+})
+```
+
+### **New confirmed cases**
+
+```{r}
+renderValueBox({
+
+country_main_sel<-input$si_count_main
+date_count<-input$si_reg_2
+valueBox(data1 %>% filter(date==date_count) %>%
+           filter(country==country_main_sel) %>% 
+           summarise(sum(new_cases)),
+         icon = "fa-ambulance")
+})
+```
+
+### **Total confirmed deaths**
+
+```{r}
+renderValueBox({
+
+country_main_sel<-input$si_count_main 
+date_count<-input$si_reg_2
+valueBox(data1 %>% filter(date==date_count) %>%
+           filter(country==country_main_sel) %>%
+           summarise(sum(total_deaths)),
+         icon = "fa-hospital",
+         color="red")
+})  
+```
+
+### **New confirmed deaths**
+
+```{r}
+renderValueBox({
+
+country_main_sel<-input$si_count_main   
+date_count<-input$si_reg_2
+valueBox(data1 %>% filter(date==date_count) %>%
+           filter(country==country_main_sel) %>%
+           summarise(sum(new_deaths)),
+         icon = "fa-hospital",
+         color="red")
+})  
+```
+
+### **Total confirmed recovered**
+
+```{r}
+renderValueBox({
+ 
+country_main_sel<-input$si_count_main 
+date_count<-input$si_reg_2
+valueBox(data1 %>% filter(date==date_count) %>%
+           filter(country==country_main_sel) %>%
+           summarise(sum(total_recovered)),
+         icon = "fa-heartbeat",
+         color="green")
+})  
+```
+
+### **New confirmed recovered**
+
+```{r}
+renderValueBox({
+  
+country_main_sel<-input$si_count_main 
+date_count<-input$si_reg_2
+valueBox(data1 %>% filter(date==date_count) %>%
+           filter(country==country_main_sel) %>%
+           summarise(sum(new_recovered)),
+         icon = "fa-heartbeat",
+         color="green")
+})
+```
+
+Row
+---------------------------------------------------------------------------------------
+
+### **Country Case Fatality Rate CFR (%)**
+
+```{r}
+renderGauge({
+
+country_main_sel<-input$si_count_main 
+date_count<-input$si_reg_2
+ff1<-data1 %>%
+  filter(date==date_count) %>% filter(country==country_main_sel) %>%
+  summarise(sum(total_cases))
+
+ff2<-data1 %>%
+  filter(date==date_count) %>% filter(country==country_main_sel) %>%
+  summarise(sum(total_deaths))
+
+let_maincount<-as.numeric((ff2/ff1)*100)
+gauge(round(let_maincount,
+            digits = 2),
+            min=0,
+            max=10,
+            gaugeSectors(success = c(0, 3),
+                         warning=c(3, 7),
+                         danger=c(7, 10),
+                         colors=c('green', 'yellow', 'red')))
+})
+```
+
+### **Country Case Recovered Rate CRR (%)**
+
+```{r}
+renderGauge({
+
+country_main_sel<-input$si_count_main
+date_count<-input$si_reg_2
+ff1<-data1 %>%
+  filter(date==date_count) %>% filter(country==country_main_sel) %>%
+  summarise(sum(total_cases))
+
+ff3<-data1 %>% 
+  filter(date==date_count) %>% filter(country==country_main_sel) %>%
+  summarise(sum(total_recovered))
+
+recov_maincount<-as.numeric((ff3/ff1)*100)
+gauge(round(recov_maincount,
+            digits = 2),
+            min=0,
+            max=100,
+            gaugeSectors(success = c(60, 100),
+                         warning=c(30, 60),
+                         danger=c(0, 30),
+                         colors=c('green', 'yellow', 'red')))
+})
+```
+
+
+Row {.tabset .tabset-fade}
+---------------------------------------------------------------------------------------
+
+### **Country map**
+```{r}
+
+World_count3=World_count
+
+ for (i in 1:nrow(row_data2)){
+    
+   count_name=as.character(row_data2[i, 2])
+    if (count_name != "Bonaire, Sint Eustatius and Saba"
+     & count_name != "Channel Islands"
+     & count_name != "Guadeloupe"
+     & count_name != "French Guiana"
+     & count_name != "Martinique"
+     & count_name != "Mayotte"
+     & count_name != "West Bank and Gaza"
+     & count_name != "Reunion"){
+      
+   World_count3[which(World_count3$country==count_name), 3]=row_data2[i,9]
+   World_count3[which(World_count3$country==count_name), 4]=row_data2[i,10]
+   World_count3[which(World_count3$country==count_name), 5]=row_data2[i,11]
+ } else {}
+ }   
+
+renderLeaflet({
+
+country_main_sel<-input$si_count_main 
+#country_main_sel<-c("Zimbabwe")
+
+nf<-which(World_count3$country==country_main_sel)
+count_plot<-World_count3[nf, ]
+
+leaflet(options = leafletOptions(dragging=TRUE,
+                                 minZoom = 2.2,
+                                 maxZoom = 18,
+                                 preferCanvas = TRUE)) %>% 
+  addTiles(group = "OMS (default)") %>%
+  addProviderTiles("CartoDB", group="CartoDB", 
+                   options = providerTileOptions(updateWhenZooming=FALSE,
+                                                 updateWhenIdle = TRUE)) %>% 
+  addPolygons(data = count_plot,
+               fillColor = "blue", 
+               color = "blue", 
+               fillOpacity = .1,
+               label = ~country) %>% 
+  setView(lng = count_plot$Long , lat=count_plot$Lat, zoom=count_plot$zoom) %>% 
+  addGraticule(interval = 20, style = list(color = "gray", weight = 1), group="Graticule") %>% 
+  addLayersControl(baseGroups = c("OSM (default)", "CartoDB"),    
+#  addLayersControl(baseGroups = c("OSM (default)", "CartoDB", "CartoDB.DarkMatter", "OpenTopoMap"),
+    overlayGroups=c("Graticule"),
+    options = layersControlOptions(collapsed = TRUE)) %>% 
+  addMiniMap(tiles = providers$Esri.WorldStreetMap,
+    toggleDisplay = TRUE)%>% 
+    addScaleBar(position = "bottomright", options = scaleBarOptions(maxWidth = 100, 
+                                                                    metric = TRUE,
+                                                                    updateWhenIdle = TRUE)) %>% 
+    addMeasure(position="bottomleft",
+               primaryLengthUnit = "meters",
+               primaryAreaUnit = "sqmeters",
+               activeColor = "#3D535D",
+               completedColor = "#7D4479",
+               localization=de)
+})
+
+```
+
+### **Cumulative variables TS**
+
+```{r}
+
+ renderHighchart({
+ 
+ country_main_sel<-input$si_count_main 
+# country_main_sel<-c("US")
+ 
+ Main_count_data_var<-data1 %>% filter(country==country_main_sel) %>%
+   select(date, country, total_cases, total_deaths, total_recovered)
+ 
+ cols <- c(brewer.pal(7, "Set1"),"black")
+ 
+ highchart (type="stock") %>%
+   
+ hc_add_series(data=Main_count_data_var,
+                 name="Deaths",
+                 type="area",
+                 hcaes(x=date, y=total_deaths)) %>% 
+ hc_add_series(data=Main_count_data_var,
+                 name="Cases",
+                 type="area",
+                 hcaes(x=date, y=total_cases)) %>%    
+ hc_add_series(data=Main_count_data_var,
+                 name="Recovered",
+                 type="area",
+                 hcaes(x=date, y=total_recovered)) %>% 
+ hc_title(text=paste("Cumulative total confirmed CASES, DEATHS & RECOVERED in:", country_main_sel,"(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+     hc_exporting(enabled = TRUE,
+             filename="Cumulative_variables_country_TS",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = "normal",
+                                marker = list(enabled = FALSE, symbol = "circle", size=1,
+                                              states = list(hover = list(enabled = TRUE))),
+                                lineWidth = 1,
+                                lineColor="black")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed cases, deaths & recovered"),
+         type="number",
+         labels=list(format= "{value:,.0f}"),
+         opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+           crosshairs=TRUE,
+           borderWidth = 2,
+           bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))
+
+ })
+
+```
+
+### **Cumulative variables per 100000 inhabitant TS**
+
+```{r}
+
+renderHighchart({
+
+country_main_sel<-input$si_count_main 
+Main_count_data_inhab<-data1 %>% filter(country==country_main_sel) %>%
+  select(date, factor1, factor2, factor3)
+
+
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+  hc_add_series(data=Main_count_data_inhab,
+                name="Deaths per 100000 inhab",
+                type="line", 
+                hcaes(x=date, y=round(factor2, digits = 2))) %>%    
+  hc_add_series(data=Main_count_data_inhab, 
+                name="Cases per 100000 inhab",
+                type="line", 
+                hcaes(x=date, y=round(factor1, digits = 2))) %>%   
+  hc_add_series(data=Main_count_data_inhab,
+                name="Recovered per 100000 inhab",
+                type="line", 
+                hcaes(x=date, y=round(factor3, digits = 2))) %>%
+hc_title(text=paste("Cumulative total confirmed: CASES, DEATHS and RECOVERED per 100000 inhab in", country_main_sel, "(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>% 
+     hc_exporting(enabled = TRUE,
+             filename="Cumulative_variables_country_TS_houndredThausand",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Cases, Deaths and Recovered per 100000 inhab"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+
+})
+```
+ 
+### **CFR and CRR TS**
+
+```{r}
+
+renderHighchart({
+  
+country_main_sel<-input$si_count_main 
+Main_count_data_cfr_crr<-data1 %>% filter(country==country_main_sel) %>%
+  select(date, CFR, CRR)  
+  
+# set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+  
+  hc_add_series(data=Main_count_data_cfr_crr, 
+                name="CFR",
+                type="line", 
+                hcaes(x=date, y=round(CFR, digits = 2))) %>% 
+  hc_add_series(data=Main_count_data_cfr_crr,
+                name="CRR",
+                type="line", 
+                hcaes(x=date, y=round(CRR, digits = 2))) %>%
+hc_title(text=paste("Case Fatality Rate CFR and Case Recovered Rate CRR in", country_main_sel,"(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+            align="left",
+            useHTML=TRUE) %>%   
+hc_legend(enabled = TRUE) %>%
+     hc_exporting(enabled = TRUE,
+             filename="CFR_and_CRR_country_TS",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="CFR and CRR"),
+           labels=list(format= "{value:,.0f}%"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>% 
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+```
+
+
+Pick various countries {data-icon="fa-line-chart" data-orientation=columns data-navmenu="Countries"}
+==========================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r select-input3}
+
+ count_list_1<-data1 %>% select(country) %>% distinct(country)
+ count_list_1<-as.character(count_list_1$country)
+ 
+ selectInput(
+   inputId = 'si_count1', label = ' Select Countries',
+   choices = count_list_1, selected = "US", multiple = TRUE)
+
+ dateInput(inputId = 'si_date2', 
+          label = ' Select date (Only for radar chart)', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+```{r select-input7}
+
+ selectInput(inputId = 'si_count2', label = 'Select Scale',
+             choices = c("logarithmic", "linear"), 
+             selected = "logarithmic", multiple = FALSE)
+```
+
+
+```{r select-input8}
+
+ selectInput(inputId = 'si_count3', label = 'Radar Chart Type',
+             choices = c("line", "area"), 
+             selected = "line", multiple = FALSE)
+```
+
+Column {.tabset}
+--------------------------------------------------------------------------------------
+
+### **Confirmed cases TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=total_cases, group=country)) %>%
+hc_title(text="Cumulative total confirmed: CASES, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed cases"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+     hc_exporting(enabled = TRUE,
+             filename="Confirmed_cases_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **Confirmed deaths TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=total_deaths, group=country)) %>%
+hc_title(text="Cumulative total confirmed: DEATHS, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed deaths"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+  hc_exporting(enabled = TRUE,
+             filename="Confirmed_deaths_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **Confirmed recovered TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=total_recovered, group=country)) %>%
+hc_title(text="Cumulative total confirmed: RECOVERED, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed recovered"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+  hc_exporting(enabled = TRUE,
+             filename="Confirmed_recovered_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **New cases TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=new_cases, group=country)) %>%
+hc_title(text="New confirmed: CASES, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed new cases"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+  hc_exporting(enabled = TRUE,
+             filename="Confirmed_Daily_cases_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **New deaths TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=new_deaths, group=country)) %>%
+hc_title(text="New confirmed: DEATHS, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed new deaths"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+    hc_exporting(enabled = TRUE,
+             filename="Confirmed_Daily_deaths_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+```
+
+### **New recovered TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=new_recovered, group=country)) %>%
+hc_title(text="New confirmed: RECOVERED, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Confirmed new recovered"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+  hc_exporting(enabled = TRUE,
+             filename="Confirmed_Daily_recovered_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **CFR TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=CFR, group=country)) %>%
+hc_title(text="Case fatality rate CFR, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="CFR"),
+           labels=list(format= "{value:,.0f}%"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+      hc_exporting(enabled = TRUE,
+             filename="CFR_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **CRR TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=CRR, group=country)) %>%
+hc_title(text="Case recovered rate CRR, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="CRR"),
+           labels=list(format= "{value:,.0f}%"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_exporting(enabled = TRUE,
+             filename="CRR_various_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **Cases per 100000 inhab TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=factor1, group=country)) %>%
+hc_title(text="Cases per 100000 inhabitant, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Cases per 100000 inhab"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_exporting(enabled = TRUE,
+             filename="Cases_per_hundredthousand_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+
+```
+
+### **Deaths per 100000 inhab TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=factor2, group=country)) %>%
+hc_title(text="Deaths per 100000 inhabitant, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Deaths per 100000 inhab"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+  hc_exporting(enabled = TRUE,
+             filename="Deaths_per_hundredthousand_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+```
+
+### **Recovered per 100000 inhab TS**
+
+```{r}
+
+renderHighchart({
+
+   countries_names<-input$si_count1
+
+   data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(countries_names)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3)
+   
+ # set color palette
+cols <- brewer.pal(7, "Set1")
+#cols <- c("blue","green","red")
+
+highchart (type="stock") %>%
+
+ hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=factor3, group=country)) %>%
+hc_title(text="Recovered per 100000 inhabitant, selected counties (Time Serie, TS)",
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=2,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 2,
+                               fillColor="red")) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(title = list(text="Recovered per 100000 inhab"),
+           labels=list(format= "{value:,.0f}"),
+           opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>% 
+hc_exporting(enabled = TRUE,
+             filename="Recovered_per_hundredthousand_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,   
+})
+```
+
+### **Cases vs new cases TS**
+
+```{r}
+renderHighchart({
+
+countries_names<-input$si_count1
+#countries_names<-c("Cuba","Argentina")
+
+scale_name<-input$si_count2
+
+ data_confront<- data1 %>%
+   filter(country %in% c(countries_names)) %>% 
+   filter(total_cases!=0) %>% 
+   select(country, date, total_cases, new_cases) 
+ #data_confront<-rename(data_confront, 'Total_cases ' = 'total_cases', 'New_daily_cases' = 'new_cases')
+
+ cols<- brewer.pal(7, "Set1")
+ 
+ hchart(data_confront, type="line", hcaes(x=total_cases, y= new_cases, group=country),
+        showInLegend=TRUE, xLab="Total cases") %>% 
+ hc_colors(cols) %>% 
+ hc_title(text= "Total cumulative cases vs New daily cases in the selected countries", 
+          align="left",
+          useHTML=TRUE) %>% 
+ hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+          align="left",
+          useHTML=TRUE) %>%
+ hc_legend(enabled = TRUE) %>%
+   hc_exporting(enabled = TRUE,
+             filename="Cases_vs_DailyCases_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+ hc_xAxis(type= (scale_name), tickInterval= 1, gridLineWidth= 1, minorTickInterval= 0.1,
+          labels=list(format= "{value:,.0f}"), title = list(text="Total cumulative cases")) %>% 
+ hc_yAxis(type= (scale_name), tickInterval= 1, gridLineWidth= 1, minorTickInterval= 0.1,
+          labels=list(format= "{value:,.0f}"), title = list(text="New daily cases")) %>% 
+   hc_plotOptions(series = list(stacking = NULL,
+                               marker = list(enabled = TRUE, symbol = "circle", size=1,
+                                             states = list(hover = list(enabled = TRUE))),
+                               lineWidth = 1,
+                               fillColor="red")) %>%
+#hc_chart(style = list(fontFamily = "Georgia",
+#                      fontWeight = "bold")) %>% 
+  hc_tooltip(borderWidth = 2,
+            bacgroundColor="transparent", 
+            pointFormat = "Country: {point.country} <br> Date: {point.date} <br> Total cases: {point.total_cases:.0f} <br> New daily cases: {point.new_cases:.0f}") %>%
+  hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/") 
+})
+
+```
+
+### **Radar**
+
+```{r}
+
+renderHighchart({
+
+select_count_date<-input$si_date2
+#select_count_date<-curr_date
+
+countries_names<-input$si_count1
+#countries_names<-c("Cuba","Argentina")
+
+radar_type<-input$si_count3
+
+ data_radar<- data1 %>%
+   filter(date==select_count_date) %>% 
+   filter(country %in% c(countries_names)) %>% 
+   select(country, date, CFR, CRR, factor1, factor2, factor3)  
+
+ data_radar[,6]<-round(data_radar[,6]*10, digits=2) #Cambio a muertos por cada millon
+ data_radar[,3]<-round(data_radar[,3]*10, digits=2) #Cambio a CFR *1000, es decir (Tot_deaths/Tot_cases)*1000
+ 
+# data_radar %>% 
+   data_radar<- rename(data_radar, 'Case fatality rate CFR= (Tot_deaths/Tot_cases)*1000' = 'CFR', 'Case recovered rate CRR (%)'='CRR',
+                       'Cases per 100000 Inhabitant'='factor1','Deaths per million Inhabitant'='factor2',
+                       'Recovered per 100000 Inhabitant'='factor3')
+          
+ gather_radar_data<-gather(data_radar, "Variables", "n", 3:7) 
+ gather_radar_data[,4]<-round(gather_radar_data[,4], digits=2)
+ 
+ 
+ 
+ cols<- brewer.pal(7, "Set1")
+ 
+ hchart(gather_radar_data, type=(radar_type), hcaes(x=Variables, y=n , group=country), showInLegend=TRUE) %>%
+   hc_chart(polar = TRUE) %>%
+ hc_colors(cols) %>% 
+ hc_title(text= paste("Main variables behavior, country comparison. Date:", select_count_date), 
+          align="left",
+          useHTML=TRUE) %>% 
+ hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+          align="left",
+          useHTML=TRUE) %>%
+ hc_legend(enabled = TRUE) %>% 
+   hc_exporting(enabled = TRUE,
+             filename="radar_countries",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+#hc_chart(style = list(fontFamily = "Georgia",
+#                      fontWeight = "bold")) %>% 
+ hc_tooltip(borderWidth = 2,
+           bacgroundColor="transparent") %>% 
+#           pointFormat = "{point.casos}: {point.tot_cas:.0f}<br> {point.porciento}: {point.percent:.2f}%") %>% 
+ hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+})
+
+```
+
+Top 10 countries {data-icon="fa-line-chart" data-orientation=columns data-navmenu="Countries"}
+==========================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r select-input16}
+
+dateInput(inputId = 'si_3', 
+          label = ' Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+```{r select-input14}
+
+ selectInput(inputId = 'si_count9', label = 'Select variable',
+             choices = c("Total Confirmed Cases", "Total Confirmed Deaths", "Total Confirmed Recovered",
+                         "Case Fatality Rate CFR","Case Recovered Rate CRR", "Cases per 100000 inhab",
+                         "Deaths per 100000 inhab", "Recovered per 100000 inhab"), 
+             selected = "Total Confirmed Cases", multiple = FALSE)
+```
+
+```{r select-input15}
+
+ list_var<-c("treemap", "sunburst")
+ 
+ selectInput(
+   inputId = 'si_var_ts1', label = 'Select chart type',
+   choices = c(list_var), selected = "treemap", multiple = FALSE)
+```
+
+```{r select-input17}
+
+ selectInput(inputId = 'si_count10', label = 'Select Scale',
+             choices = c("logarithmic", "linear"), 
+             selected = "logarithmic", multiple = FALSE)
+```
+
+Column {.tabset}
+--------------------------------------------------------------------------------------
+
+### **Treemap & sunburst**
+
+```{r, fig.keep='none'}
+
+renderHighchart({
+
+date_for_chart<-input$si_3
+#date_for_chart<-curr_date
+
+chart_type<-input$si_var_ts1
+#chart_type<-c("treemap")
+
+Variab<-input$si_count9
+#Variab<-c("Total Confirmed Cases")
+
+Country_chart_data<- data1 %>%    #All countries with date selected
+  filter(date==date_for_chart)
+
+ if (Variab=="Total Confirmed Cases"){
+       varsize<-"total_cases"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$total_cases,decreasing = T)[1:10],]
+ } else {}
+ if (Variab=="Total Confirmed Deaths"){
+       varsize<-"total_deaths"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$total_deaths,decreasing = T)[1:10],]
+ } else {}
+ if (Variab=="Total Confirmed Recovered"){
+       varsize<-"total_recovered"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$total_recovered,decreasing = T)[1:10],]
+ } else {}
+ if (Variab=="Case Fatality Rate CFR"){
+       varsize<-"CFR"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$CFR,decreasing = T)[1:10],]
+ } else {}
+if (Variab=="Case Recovered Rate CRR"){
+       varsize<-"CRR"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$CRR,decreasing = T)[1:10],]
+ } else {}
+if (Variab=="Cases per 100000 inhab"){
+       varsize<-"factor1"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$factor1,decreasing = T)[1:10],]
+ } else {}
+if (Variab=="Deaths per 100000 inhab"){
+       varsize<-"factor2"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$factor2,decreasing = T)[1:10],]
+ } else {}
+if (Variab=="Recovered per 100000 inhab"){
+       varsize<-"factor3"
+       Top_10_count_df<- Country_chart_data[order(Country_chart_data$factor3,decreasing = T)[1:10],]
+ } else {}
+
+tm1<- data_to_hierarchical(data=Top_10_count_df,
+                     group_vars = c("region","country"),
+                     size_var = c(varsize),
+                     colors = getOption("highcharter.color_palette"))
+
+hchart(tm1, type = chart_type) %>% 
+hc_title(text= paste("Top 10", Variab, "by countries and Regions. Date:", date_for_chart), 
+           align="left",
+           useHTML=TRUE) %>% 
+ hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+           align="left",
+           useHTML=TRUE) %>%
+ hc_legend(enabled = TRUE) %>% 
+ hc_exporting(enabled = TRUE,
+             filename="Top_ten_variables",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/")
+})
+
+```
+
+### **Bar plot**
+
+```{r}
+
+renderHighchart({
+
+date_for_chart<-input$si_3
+#date_for_chart<-curr_date
+
+Variab<-input$si_count9
+#Variab<-c("Total Confirmed Cases")
+
+
+Country_chart_data<- data1 %>%    #All countries with date selected
+  filter(date==date_for_chart)
+
+ if (Variab=="Total Confirmed Cases"){
+       col_obj<-Country_chart_data$total_cases
+ } else {}
+ if (Variab=="Total Confirmed Deaths"){
+       col_obj<-Country_chart_data$total_deaths   
+ } else {}
+ if (Variab=="Total Confirmed Recovered"){
+       col_obj<-Country_chart_data$total_recovered 
+ } else {}
+ if (Variab=="Case Fatality Rate CFR"){
+       col_obj<-Country_chart_data$CFR
+ } else {}
+if (Variab=="Case Recovered Rate CRR"){
+       col_obj<- Country_chart_data$CRR
+ } else {}
+if (Variab=="Cases per 100000 inhab"){
+       col_obj<- Country_chart_data$factor1
+ } else {}
+if (Variab=="Deaths per 100000 inhab"){
+       col_obj<- Country_chart_data$factor2
+ } else {}
+if (Variab=="Recovered per 100000 inhab"){
+       col_obj<- Country_chart_data$factor3
+ } else {}
+
+Country_chart_data<-cbind(Country_chart_data,col_obj)
+
+Top_10_count_df<- Country_chart_data[order(Country_chart_data$col_obj,decreasing = T)[1:10],]
+
+hchart(Top_10_count_df, 
+       type = "bar", 
+       hcaes(x=country, y=col_obj),
+       name="Top 10 Countries",
+       showInLegend = TRUE) %>% 
+hc_colors(getOption("highcharter.color_palette")) %>% 
+hc_legend(enabled = TRUE) %>%  
+hc_yAxis(title = list(text=paste0(Variab))) %>% 
+hc_xAxis(title = list(text="Countries")) %>%
+hc_title(text= paste("Top 10", Variab, "by countries and Regions. Date:", date_for_chart), 
+           align="left",
+           useHTML=TRUE) %>% 
+ hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+           align="left",
+           useHTML=TRUE) %>%
+ hc_legend(enabled = TRUE) %>% 
+  hc_exporting(enabled = TRUE,
+             filename="Top_ten_variables_barplot",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/") 
+})
+```
+
+
+Column {.tabset}
+--------------------------------------
+
+### **Top 10 countries TS**
+```{r}
+
+renderHighchart({
+
+date_for_chart<-input$si_3
+#date_for_chart<-curr_date
+
+Variab<-input$si_count9
+#Variab<-c("Total Confirmed Cases") 
+
+var_scale<-input$si_count10
+#var_scale<-c("logarithmic")
+  
+Country_chart_data<- data1 %>%    #All countries with date selected
+  filter(date==date_for_chart)  
+  
+if (Variab=="Total Confirmed Cases"){
+       col_obj<-Country_chart_data$total_cases
+ } else {}
+ if (Variab=="Total Confirmed Deaths"){
+       col_obj<-Country_chart_data$total_deaths   
+ } else {}
+ if (Variab=="Total Confirmed Recovered"){
+       col_obj<-Country_chart_data$total_recovered 
+ } else {}
+ if (Variab=="Case Fatality Rate CFR"){
+       col_obj<-Country_chart_data$CFR
+ } else {}
+if (Variab=="Case Recovered Rate CRR"){
+       col_obj<- Country_chart_data$CRR
+ } else {}
+if (Variab=="Cases per 100000 inhab"){
+       col_obj<- Country_chart_data$factor1
+ } else {}
+if (Variab=="Deaths per 100000 inhab"){
+       col_obj<- Country_chart_data$factor2
+ } else {}
+if (Variab=="Recovered per 100000 inhab"){
+       col_obj<- Country_chart_data$factor3
+ } else {}
+
+Country_chart_data<-cbind(Country_chart_data,col_obj)
+
+Top_10_count_df<- Country_chart_data[order(Country_chart_data$col_obj,decreasing = T)[1:10],]  
+top_10_count_name<-Top_10_count_df$country
+
+data_main_count<- data1 %>%
+     group_by(country) %>% 
+     filter(country %in% c(top_10_count_name)) %>% 
+     select(country, date, total_cases, total_deaths, total_recovered, new_cases, new_deaths,
+            new_recovered, CFR, CRR, factor1, factor2, factor3) %>% 
+ungroup()
+
+if (Variab=="Total Confirmed Cases"){
+       col_obj1<-data_main_count$total_cases
+       auxvect<-as.data.frame(col_obj1)
+} else {}
+if (Variab=="Total Confirmed Deaths"){
+       col_obj1<-data_main_count$total_deaths
+       auxvect<-as.data.frame(col_obj1)
+} else {}
+if (Variab=="Total Confirmed Recovered"){
+       col_obj1<-data_main_count$total_recovered
+       auxvect<-as.data.frame(col_obj1)
+} else {}
+if (Variab=="Case Fatality Rate CFR"){
+       col_obj1<-data_main_count$CFR
+       auxvect<-as.data.frame(col_obj1)
+} else {}
+if (Variab=="Case Recovered Rate CRR"){
+       col_obj1<-data_main_count$CRR
+       auxvect<-as.data.frame(col_obj1)
+} else {}
+if (Variab=="Cases per 100000 inhab"){
+       col_obj1<-data_main_count$factor1
+       auxvect<-as.data.frame(col_obj1)
+ } else {}
+if (Variab=="Deaths per 100000 inhab"){
+       col_obj1<-data_main_count$factor2
+       auxvect<-as.data.frame(col_obj1)
+ } else {}
+if (Variab=="Recovered per 100000 inhab"){
+       col_obj1<-data_main_count$factor3
+       auxvect<-as.data.frame(col_obj1)
+ } else {}
+
+data_main_count<-cbind(data_main_count,auxvect)
+
+vect_min_date<-data_main_count %>%      #vector of all the min dates for each country
+  group_by(country) %>%
+  summarise(min_date=min(date))
+date_min<-max(vect_min_date$min_date)    #max date of all min dates of the selected countries
+
+date_for_chart1<-as.Date(date_for_chart)
+
+data_main_count<-data_main_count %>%    #data frame with "top 10 countries TS" between lower and upper dates.
+  group_by(country) %>% 
+  filter(between(date, date_min, date_for_chart1))
+
+cols <- brewer.pal(7, "Set1")
+
+highchart (type="stock") %>%
+
+hc_add_series(data=data_main_count,
+#                name="CFR",
+                type="line",
+                hcaes(x=date, y=col_obj1, group=country)) %>%
+hc_title(text=paste("Top 10", Variab, "by countries. Date:", date_for_chart, "(Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_legend(enabled = TRUE) %>%
+hc_colors(cols) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+hc_yAxis(type= (var_scale),
+         tickInterval= 1,
+         gridLineWidth= 1,
+         minorTickInterval= 0.1,
+         title = list(text=paste0(Variab)),
+         labels=list(format= "{value:,.0f}"),
+         opposite=FALSE) %>%
+hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+   hc_exporting(enabled = TRUE,
+             filename="Top_ten_variables_TS",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,
+})  
+  
+```
+
+
+All countries map {data-icon="fa-map-o" data-orientation=columns data-navmenu="Countries"}
+==========================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r select-input2}
+
+dateInput(inputId = 'si_2', 
+          label = ' Select date', 
+          value = max_date,
+          min = min_date, 
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+```{r select-input9}
+
+ selectInput(inputId = 'si_count4', label = 'Select variable',
+             choices = c("Total Confirmed Cases", "Total Confirmed Deaths", "Total Confirmed Recovered",
+                         "Case Fatality Rate CFR","Case Recovered Rate CRR", "Cases per 100000 inhab",
+                         "Deaths per 100000 inhab", "Recovered per 100000 inhab"), 
+             selected = "Total Confirmed Cases", multiple = FALSE)
+```
+
+```{r select-input12}
+
+ selectInput(inputId = 'si_count7', label = 'Select Colour Palette',
+             choices = c("Viridis", "Reds", "Blues", "Greens"), 
+             selected = "Viridis", multiple = FALSE)
+```
+
+```{r select-input13}
+
+ selectInput(inputId = 'si_count8', label = 'Select Map Type',
+             choices = c("Bubble", "Choropleth"), 
+             selected = "Choropleth", multiple = FALSE)
+```
+
+```{r slider-input1}
+
+ sliderInput(inputId = 'sli_1', label = 'Resize the bubble',
+             min=30, max=50, value=30)
+```
+
+Column
+------------------------------------------------------------------
+
+### **Countries map** 
+
+```{r}
+
+renderLeaflet({
+
+World_count2=World_count
+
+Map_type<-input$si_count8
+#Map_type<-("Choropleth")
+
+var_graph<-input$si_count4
+#var_graph<-c("Total Confirmed Cases")
+
+region_map_date<-input$si_2
+#region_map_date<-curr_date
+
+Var_col_palette1<-input$si_count7
+#Var_col_palette1<-("viridis")
+
+Bubble_size<-input$sli_1
+#Bubble_size<-30
+
+if (Var_col_palette1=="Viridis"){
+  Var_col_palette1<-c("viridis")
+}
+
+if (var_graph=="Total Confirmed Cases"){
+  World_count2$count_tot_cases<-as.numeric(NA)
+}
+if (var_graph=="Total Confirmed Deaths"){
+  World_count2$count_tot_deaths<-as.numeric(NA)
+}
+if (var_graph=="Total Confirmed Recovered"){
+  World_count2$count_tot_recovered<-as.numeric(NA)
+}
+if (var_graph=="Case Fatality Rate CFR"){
+  World_count2$CFR<-as.numeric(NA)
+}
+if (var_graph=="Case Recovered Rate CRR"){
+  World_count2$CRR<-as.numeric(NA)
+}
+if (var_graph=="Cases per 100000 inhab"){
+  World_count2$factor1<-as.numeric(NA)
+}
+if (var_graph=="Deaths per 100000 inhab"){
+  World_count2$factor2<-as.numeric(NA)
+}
+if (var_graph=="Recovered per 100000 inhab"){
+  World_count2$factor3<-as.numeric(NA)
+}
+
+data_count_map_date<- data1 %>%
+  filter(date==region_map_date) %>%
+  select(country, total_cases, total_deaths, total_recovered, CFR, CRR,
+         factor1, factor2, factor3)
+
+ for (i in 1:nrow(data_count_map_date)){
+
+   count_name=as.character(data_count_map_date[i, 1])
+    if (count_name != "Bonaire, Sint Eustatius and Saba"
+     & count_name != "Channel Islands"
+     & count_name != "Guadeloupe"
+     & count_name != "French Guiana"
+     & count_name != "Martinique"
+     & count_name != "Mayotte"
+     & count_name != "West Bank and Gaza"
+     & count_name != "Reunion"){
+
+   if (var_graph=="Total Confirmed Cases"){
+   World_count2[which(World_count2$country==count_name), 7]=data_count_map_date[i,2]
+   }
+   if (var_graph=="Total Confirmed Deaths"){
+   World_count2[which(World_count2$country==count_name), 7]=data_count_map_date[i,3]
+   }
+   if (var_graph=="Total Confirmed Recovered"){
+   World_count2[which(World_count2$country==count_name), 7]=data_count_map_date[i,4]
+   }
+   if (var_graph=="Case Fatality Rate CFR"){
+   World_count2[which(World_count2$country==count_name), 7]=round(data_count_map_date[i,5], digits = 2)
+   }
+   if (var_graph=="Case Recovered Rate CRR"){
+   World_count2[which(World_count2$country==count_name), 7]=round(data_count_map_date[i,6], digits = 2)
+   }
+   if (var_graph=="Cases per 100000 inhab"){
+   World_count2[which(World_count2$country==count_name), 7]=round(data_count_map_date[i,7], digits = 2)
+   }
+   if (var_graph=="Deaths per 100000 inhab"){
+   World_count2[which(World_count2$country==count_name), 7]=round(data_count_map_date[i,8], digits = 2)
+   }
+   if (var_graph=="Recovered per 100000 inhab"){
+   World_count2[which(World_count2$country==count_name), 7]=round(data_count_map_date[i,9], digits = 2)
+   }
+
+ } else {}
+ }
+
+if (var_graph=="Total Confirmed Cases"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$count_tot_cases, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "Confirmed Cases: ", "</b>", World_count2$count_tot_cases)
+  col_obj<-World_count2$count_tot_cases
+}
+if (var_graph=="Total Confirmed Deaths"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$count_tot_deaths, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "Confirmed Deaths: ", "</b>", World_count2$count_tot_deaths)
+  col_obj<-World_count2$count_tot_deaths
+}
+if (var_graph=="Total Confirmed Recovered"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$count_tot_recovered, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "Confirmed Recovered: ", "</b>", World_count2$count_tot_recovered)
+  col_obj<-World_count2$count_tot_recovered
+}
+if (var_graph=="Case Fatality Rate CFR"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$CFR, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "CFR: ", "</b>", World_count2$CFR)
+  col_obj<-World_count2$CFR
+}
+if (var_graph=="Case Recovered Rate CRR"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$CRR, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "CRR: ", "</b>", World_count2$CRR)
+  col_obj<-World_count2$CRR
+}
+if (var_graph=="Cases per 100000 inhab"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$factor1, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "Cases per 100000 inhab: ", "</b>", World_count2$factor1)
+  col_obj<-World_count2$factor1
+}
+if (var_graph=="Deaths per 100000 inhab"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$factor2, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "Deaths per 100000 inhab: ", "</b>", World_count2$factor2)
+  col_obj<-World_count2$factor2
+}
+if (var_graph=="Recovered per 100000 inhab"){
+  palnumeric <- colorBin(Var_col_palette1, domain = World_count2$factor3, bins=10, pretty=TRUE, alpha = F, reverse = F)
+  popup <- paste0("<b>", "Country: ", "</b>", as.character(World_count2$country),
+    "<br>", "<b>", "Recovered per 100000 inhab: ", "</b>", World_count2$factor3)
+  col_obj<-World_count2$factor3
+}
+
+auxmat<-as.data.frame(col_obj)
+auxmat$zoom<-as.numeric(NA)
+maxim<-max(auxmat$col_obj)
+minim<-min(auxmat$col_obj)
+for (i in 1:nrow(auxmat)){
+   auxmat[i,2]=Bubble_size-(((maxim-auxmat[i,1])/(maxim-minim))*(Bubble_size-0))
+}
+
+if (Map_type=="Bubble"){
+    maxim<-max(World_count2$col_obj)
+    minim<-min(World_count2$col_obj)
+ for (i in 1:nrow(row_data2)){
+
+   count_name=as.character(row_data2[i, 2])
+    if (count_name != "Bonaire, Sint Eustatius and Saba"
+     & count_name != "Channel Islands"
+     & count_name != "Guadeloupe"
+     & count_name != "French Guiana"
+     & count_name != "Martinique"
+     & count_name != "Mayotte"
+     & count_name != "West Bank and Gaza"
+     & count_name != "Reunion"){
+   World_count2[which(World_count2$country==count_name), 3]=row_data2[i,9]
+   World_count2[which(World_count2$country==count_name), 4]=row_data2[i,10]
+ } else {}
+ }
+}
+
+World_count2$zoom<-auxmat$zoom
+#col_obj<-as.data.frame(col_obj)
+World_count2<-cbind(World_count2,col_obj)
+
+#Map generation
+if (Map_type=="Choropleth"){
+
+leaflet(options = leafletOptions(dragging=TRUE,
+                                 minZoom = 2.2,
+                                 maxZoom = 18,
+                                 preferCanvas = TRUE)) %>%
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles("CartoDB", group="CartoDB",
+                   options = providerTileOptions(updateWhenZooming=FALSE,
+                                                 updateWhenIdle = TRUE)) %>%
+  setView(lng = 0, lat=40, zoom= 2.2) %>%
+  addPolygons(data=World_count2,
+              color = "#444444" ,
+              weight = 1,
+              smoothFactor = 0.5,
+              opacity = 1.0,
+              fillOpacity = 0.5,
+              fillColor = ~palnumeric(World_count2$col_obj),    # Color de llenado
+              group = (var_graph),
+              highlightOptions = highlightOptions(color = "white", weight = 2,
+                                                  bringToFront = TRUE), #highlight cuando pasas el cursor
+              label = ~World_count2$country,                                  # etiqueta cuando pasas el cursor
+              labelOptions = labelOptions(direction = "auto"),
+              popup = popup) %>%        # mostrar el popup
+          addLegend(position = "bottomleft", pal = palnumeric, values = World_count2$col_obj,
+                    group = (var_graph), title= (var_graph), opacity = 1) %>%
+  addGraticule(interval = 20, style = list(color = "gray", weight = 1), group="Graticule") %>%
+  addLayersControl(baseGroups = c("OSM (default)", "CartoDB"),
+    overlayGroups=c("Graticule"),
+    options = layersControlOptions(collapsed = TRUE)) %>%
+  addMiniMap(tiles = providers$Esri.WorldStreetMap,
+    toggleDisplay = TRUE)%>%
+    addScaleBar(position = "bottomright", options = scaleBarOptions(maxWidth = 100,
+                                                                    metric = TRUE,
+                                                                    updateWhenIdle = TRUE)) %>%
+    addMeasure(position="bottomleft",
+               primaryLengthUnit = "meters",
+               primaryAreaUnit = "sqmeters",
+               activeColor = "#3D535D",
+               completedColor = "#7D4479",
+               localization=de)
+}else{
+
+  leaflet(options = leafletOptions(dragging=TRUE,
+                                 minZoom = 2.2,
+                                 maxZoom = 18,
+                                 preferCanvas = TRUE)) %>%
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles("CartoDB", group="CartoDB",
+                   options = providerTileOptions(updateWhenZooming=FALSE,
+                                                 updateWhenIdle = TRUE)) %>%
+  setView(lng = 0, lat=40, zoom= 2.2) %>%
+
+  addCircleMarkers(data=World_count2, lng = ~Long, lat= ~Lat,
+                   radius = ~zoom,
+                   color = "red", #~palnumeric(World_count2$col_obj),
+                   weight = 1,
+                   opacity = 1.0,
+                   fillOpacity = 0.5,
+                   group = (var_graph),
+                   label = ~World_count2$country,
+                   labelOptions = labelOptions(direction = "auto"),
+                   popup = popup) %>%   # mostrar el popup
+#             addLegend(position = "bottomleft", pal = palnumeric, values = World_count2$col_obj,
+#                    title= (var_graph), opacity = 1) %>%
+      addGraticule(interval = 20, style = list(color = "gray", weight = 1), group="Graticule") %>%
+  addLayersControl(baseGroups = c("OSM (default)", "CartoDB"),
+    overlayGroups=c("Graticule"),
+    options = layersControlOptions(collapsed = TRUE)) %>%
+  addMiniMap(tiles = providers$Esri.WorldStreetMap,
+    toggleDisplay = TRUE) %>%
+    addScaleBar(position = "bottomright", options = scaleBarOptions(maxWidth = 100,
+                                                                    metric = TRUE,
+                                                                    updateWhenIdle = TRUE))
+}
+})
+
+```
+
+Forecasting {data-icon="fa-cogs" data-orientation=columns data-navmenu="Models"}
+===================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r select-input23}
+
+dateInput(inputId = 'si_4',
+          label = ' Select date',
+          value = max_date,
+          min = min_date,
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+```{r select-input21}
+
+count_list_main<-data1 %>%
+  select(country) %>%
+  distinct(country)
+
+ count_list_main<-as.character(count_list_main$country)
+
+ selectInput(
+   inputId = 'si_count_main1', label = ' Select a Country',
+   choices = count_list_main, selected = "US")
+```
+
+```{r select-input22}
+
+ selectInput(inputId = 'si_count13', label = 'Select cummulative variable',
+             choices = c("Total Confirmed Cases", "Total Confirmed Deaths", "Total Confirmed Recovered"),
+             selected = "Total Confirmed Cases", multiple = FALSE)
+```
+
+```{r slider-input2}
+
+ sliderInput(inputId = 'sli_2', label = 'Number of day for prediction',
+             min=1, max=100, value=28)
+```
+
+Column {data-width=600}
+------------------------------------------------------------------
+
+### **Forecast variable TS** 
+
+```{r}
+ 
+renderHighchart({
+
+Fcast_date<-input$si_4
+#Fcast_date<-as.Date("2020-09-01")
+
+Variab_obj<-input$si_count13
+#Variab_obj<-"Total Confirmed Cases"
+
+country_main_sel<-input$si_count_main1
+#country_main_sel<-c("US")
+
+Numb_days<-input$sli_2
+#Numb_days=28
+
+ if (Variab_obj=="Total Confirmed Cases"){
+   Obj_col2<-data1$total_cases
+ }
+ if (Variab_obj=="Total Confirmed Deaths"){
+   Obj_col2<-data1$total_deaths
+ }
+ if (Variab_obj=="Total Confirmed Recovered"){
+   Obj_col2<-data1$total_recovered
+ }
+ #auxmat<-as.data.frame(col_obj)
+ data1a<-cbind(data1,Obj_col2)
+
+ curr_date1<-as.Date(curr_date)
+
+ if (Fcast_date==curr_date1){
+
+ df_calc<-data1a %>%
+   filter(country==country_main_sel) %>%
+   select(country, date, Obj_col2)
+
+ df_calc_forecast<-data.frame(df_calc$date, df_calc$Obj_col2)
+ colnames(df_calc_forecast)<-c("ds","y")
+
+ #Forecasting
+ m<-prophet(df_calc_forecast)
+
+ #Prediction
+ future<-make_future_dataframe(m, periods = Numb_days)
+ forecast<-predict(m, future)
+
+ data_forecats<-forecast[c('ds','yhat','yhat_lower','yhat_upper')]
+ colnames(data_forecats)<-c("date","y", "ymin", "ymax")
+
+ data_forecats$y=round(data_forecats$y, digits = 0)
+ data_forecats$ymin=round(data_forecats$ymin, digits = 0)
+ data_forecats$ymax=round(data_forecats$ymax, digits = 0)
+ data_forecats$date<-as.Date(data_forecats$date)
+
+ df_calc$Obj_col2=round(df_calc$Obj_col2, digits = 0)
+
+ highchart (type="stock") %>%
+ hc_add_series(data=df_calc,
+               name="Real",
+               type="scatter",
+               color='gray',
+               size=1,
+               hcaes(x=date, y=Obj_col2)) %>%
+ hc_add_series(data=data_forecats,
+               name="Forecast Range",
+               type="arearange",
+               color='#87CEFA',
+               fillOpacity=0.3,
+               hcaes(x=date, low=ymin, high=ymax)) %>%
+ hc_add_series(data=data_forecats,
+               name="Forecast Main",
+               type="line",
+               color='orange',
+               hcaes(x=date, y=y)) %>%
+   hc_title(text=paste(Variab_obj,"in",country_main_sel,"and forecast for:",Numb_days," days (Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+   hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = list(text=paste0(Variab_obj, " with forecast")),
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_legend(enabled = TRUE) %>%
+    hc_exporting(enabled = TRUE,
+             filename="Forecast_variables_TS",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+   hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,
+ }else{
+
+vect_min_date1<-data1a %>%
+  filter(country==country_main_sel) %>%
+  select(date)
+
+date_min<-as.Date(min(vect_min_date1$date))
+
+df_calc<-data1a %>%
+   filter(country==country_main_sel) %>%
+  filter(between(date,date_min, Fcast_date)) %>%
+   select(country, date, Obj_col2)
+
+df_calc2<-data1a %>%
+   filter(country==country_main_sel) %>%
+  filter(between(date,Fcast_date, curr_date1)) %>%
+   select(country, date, Obj_col2)
+
+
+ df_calc_forecast<-data.frame(df_calc$date, df_calc$Obj_col2)
+ colnames(df_calc_forecast)<-c("ds","y")
+
+ #Forecasting
+ m<-prophet(df_calc_forecast)
+
+  #Prediction
+ future<-make_future_dataframe(m, periods = Numb_days)
+ forecast<-predict(m, future)
+
+ data_forecats<-forecast[c('ds','yhat','yhat_lower','yhat_upper')]
+ colnames(data_forecats)<-c("date","y", "ymin", "ymax")
+
+ data_forecats$y=round(data_forecats$y, digits = 2)
+ data_forecats$ymin=round(data_forecats$ymin, digits = 2)
+ data_forecats$ymax=round(data_forecats$ymax, digits = 2)
+ data_forecats$date<-as.Date(data_forecats$date)
+
+ df_calc$Obj_col2=round(df_calc$Obj_col2, digits = 0)
+ df_calc2$Obj_col2=round(df_calc2$Obj_col2, digits = 0)
+ 
+ highchart (type="stock") %>%
+ hc_add_series(data=df_calc,
+               name="Real",
+               type="scatter",
+               color='gray',
+               size=1,
+               hcaes(x=date, y=Obj_col2)) %>%
+ hc_add_series(data=df_calc2,
+               name="Real after selected date",
+               type="scatter",
+               color='black',
+               size=1,
+               hcaes(x=date, y=Obj_col2)) %>%
+ hc_add_series(data=data_forecats,
+               name="Forecast Range",
+               type="arearange",
+               color='#87CEFA',
+               fillOpacity=0.3,
+               hcaes(x=date, low=ymin, high=ymax)) %>%
+   hc_add_series(data=data_forecats,
+               name="Forecast Main",
+               type="line",
+               color='orange',
+               hcaes(x=date, y=y)) %>%
+   hc_title(text=paste(Variab_obj, "in",country_main_sel,"and forecast for:",Numb_days," days (Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+   hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = list(text=paste0(Variab_obj," with forecast")),
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_legend(enabled = TRUE) %>%
+    hc_exporting(enabled = TRUE,
+             filename="Forecast_variables_TS",
+             formAttribute=list(target="_black"),
+             buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+   hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+   hc_exporting(enabled = TRUE) %>%  # enable export
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,
+ }
+})
+
+```
+
+
+Column {data-width=400}
+------------------------------------------------------------------
+
+### **Variable per weekdays** 
+
+```{r}
+
+renderHighchart({
+
+Fcast_date_a<-input$si_4
+#Fcast_date_a<-as.Date("2020-09-01")
+
+Variab_obj_a<-input$si_count13
+#Variab_obj_a<-"Total Confirmed Cases"
+
+country_main_sel_a<-input$si_count_main1
+#country_main_sel_a<-c("US")
+
+ if (Variab_obj_a=="Total Confirmed Cases"){
+   Obj_col2_a<-data1$new_cases
+   text_var<-c("New daily cases")
+ }
+ if (Variab_obj_a=="Total Confirmed Deaths"){
+   Obj_col2_a<-data1$new_deaths
+   text_var<-c("New daily deaths")
+ }
+ if (Variab_obj_a=="Total Confirmed Recovered"){
+   Obj_col2_a<-data1$new_recovered
+   text_var<-c("New daily recovered")
+ }
+ #auxmat<-as.data.frame(col_obj)
+ data1b<-cbind(data1,Obj_col2_a)
+
+ df_calc_a<-data1b %>%
+   filter(country==country_main_sel_a) %>%
+   select(country, date, Obj_col2_a)
+ 
+ df_calc_a$day <- weekdays(as.Date(df_calc_a$date))
+ 
+  df_calc_a$day_eng<- if_else(df_calc_a$day=="domingo", "Sunday", 
+                             if_else(df_calc_a$day=="lunes", "Monday",
+                                     if_else(df_calc_a$day=="martes", "Tuesday",
+                                             if_else(df_calc_a$day=="miércoles", "Wednesday",
+                                                     if_else(df_calc_a$day=="jueves", "Thursday",
+                                                             if_else(df_calc_a$day=="viernes", "Friday","Saturday"))))))
+ 
+ 
+   df_calc_days<-df_calc_a %>% 
+   group_by(day_eng) %>% 
+   summarise(Suma=sum(Obj_col2_a), prom=mean(Obj_col2_a), n=n())
+ 
+   df_calc_days$prom=round(df_calc_days$prom, digits = 2)
+   
+   df_calc_days$day_eng <- factor(df_calc_days$day_eng, levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+   df_calc_days[order(df_calc_days$day_eng)[1:7], ]
+
+   df_calc_days$prom<-round(df_calc_days$prom, 0)
+    
+ hchart(df_calc_days, 
+       type = "column", 
+       hcaes(x=day_eng, y=prom),
+       name="Mean by weekdays",
+       showInLegend = TRUE) %>% 
+hc_colors(getOption("highcharter.color_palette")) %>% 
+hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.2,
+            title = list(text=paste0(text_var)),
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_xAxis(title = list(text="Days of the week"),
+         categories = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")) %>%
+hc_title(text= paste(text_var, "in",country_main_sel_a,"by days of the Week, mean values per days."), 
+           align="left",
+           useHTML=TRUE) %>% 
+ hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series", 
+           align="left",
+           useHTML=TRUE) %>%
+ hc_legend(enabled = TRUE) %>% 
+     hc_exporting(enabled = TRUE,
+             filename="Variables_per_weekdays") %>%  # enable export
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+           href = "http://www.htmlwidgets.org/") 
+})
+
+```
+
+### **Model performance** 
+
+```{r}
+
+renderHighchart({
+
+Fcast_date<-input$si_4
+#Fcast_date<-as.Date("2020-09-01")
+#Fcast_date<-as.Date(curr_date)
+
+Variab_obj<-input$si_count13
+#Variab_obj<-"Total Confirmed Cases"
+
+country_main_sel<-input$si_count_main1
+#country_main_sel<-c("US")
+
+Numb_days<-input$sli_2
+#Numb_days=28
+
+ if (Variab_obj=="Total Confirmed Cases"){
+   Obj_col2<-data1$total_cases
+ }
+ if (Variab_obj=="Total Confirmed Deaths"){
+   Obj_col2<-data1$total_deaths
+ }
+ if (Variab_obj=="Total Confirmed Recovered"){
+   Obj_col2<-data1$total_recovered
+ }
+ #auxmat<-as.data.frame(col_obj)
+ data1a<-cbind(data1,Obj_col2)
+
+ curr_date1<-as.Date(curr_date)
+
+ if (Fcast_date==curr_date1){
+
+ df_calc<-data1a %>%
+   filter(country==country_main_sel) %>%
+   select(country, date, Obj_col2)
+
+ df_calc_forecast<-data.frame(df_calc$date, df_calc$Obj_col2)
+ colnames(df_calc_forecast)<-c("ds","y")
+
+ num_fil<-nrow(df_calc_forecast)
+
+ #Forecasting
+ m<-prophet(df_calc_forecast)
+
+ #Prediction
+ future<-make_future_dataframe(m, periods = Numb_days)
+ forecast<-predict(m, future)
+
+ data_forecast<-forecast[c('ds','yhat','yhat_lower','yhat_upper')]
+ colnames(data_forecast)<-c("date","y", "ymin", "ymax")
+
+ data_forecast$y=round(data_forecast$y, digits = 0)
+ 
+ #Model Performance
+ pred<-as.data.frame(data_forecast$y[1:num_fil])
+ colnames(pred)<-c("pred")
+ actual<-as.data.frame(m$history$y)
+ colnames(actual)<-c("actual")
+
+ pred_act<-cbind(pred, actual)
+
+ lm.model<- augment(lm(pred~actual, data=pred_act))
+ lm.model$.fitted<-round(lm.model$.fitted, digits = 0)
+
+ highchart () %>%
+ hc_add_series(data=pred_act,
+               name="Predict_vs_Actual",
+               type="scatter",
+               color='gray',
+               hcaes(x=actual, y=pred)) %>%
+ hc_add_series(data=lm.model,
+                name="lm regression",
+                type="line",
+                color='red',
+                hcaes(x=actual, y=.fitted)) %>%
+   hc_title(text=paste(Variab_obj, "forecast Model Performance in",country_main_sel),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_xAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = list(text=paste0(Variab_obj," Actual")),
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+   hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = list(text=paste0(Variab_obj," Predicted")),
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_legend(enabled = TRUE) %>%
+        hc_exporting(enabled = TRUE,
+             filename="Model_performance") %>%  # enable export
+   hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/")
+
+ }else{
+
+  vect_min_date1<-data1a %>%
+  filter(country==country_main_sel) %>%
+  select(date)
+
+date_min<-as.Date(min(vect_min_date1$date))
+
+df_calc<-data1a %>%
+   filter(country==country_main_sel) %>%
+  filter(between(date,date_min, Fcast_date)) %>%
+   select(country, date, Obj_col2)
+
+df_calc2<-data1a %>%
+   filter(country==country_main_sel) %>%
+  filter(between(date,Fcast_date, curr_date1)) %>%
+   select(country, date, Obj_col2)
+
+df_calc3<-data1a %>%
+   filter(country==country_main_sel) %>%
+  filter(between(date,date_min, curr_date1)) %>%
+   select(country, date, Obj_col2)
+
+ df_calc_forecast<-data.frame(df_calc$date, df_calc$Obj_col2)
+ colnames(df_calc_forecast)<-c("ds","y")
+
+  num_fil<-nrow(df_calc_forecast)
+  num_fil2<-nrow(df_calc2)-1
+
+#Forecasting
+ m<-prophet(df_calc_forecast)
+
+  #Prediction
+ future<-make_future_dataframe(m, periods = Numb_days)
+ forecast<-predict(m, future)
+
+ data_forecast<-forecast[c('ds','yhat','yhat_lower','yhat_upper')]
+ colnames(data_forecast)<-c("date","y", "ymin", "ymax")
+
+ data_forecast$y=round(data_forecast$y, digits = 0)
+
+ #Model Performance
+ pred<-as.data.frame(data_forecast$y[1:(num_fil+num_fil2)])
+ colnames(pred)<-c("pred")
+ #actual<-as.data.frame(m$history$y[1:(num_fil+num_fil2)])
+ actual<-as.data.frame(df_calc3$Obj_col2)
+ colnames(actual)<-c("actual")
+
+ pred_act<-cbind(pred, actual)
+
+ lm.model<- augment(lm(pred~actual, data=pred_act))
+ lm.model$.fitted<-round(lm.model$.fitted, digits = 0)
+
+  highchart () %>%
+ hc_add_series(data=pred_act,
+               name="Predict_vs_Actual",
+               type="scatter",
+               color='gray',
+               hcaes(x=actual, y=pred)) %>%
+ hc_add_series(data=lm.model,
+                name="lm regression",
+                type="line",
+                color='red',
+                hcaes(x=actual, y=.fitted)) %>%
+   hc_title(text=paste(Variab_obj, "forecast Model Performance",country_main_sel),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_xAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = list(text=paste0(Variab_obj," Actual")),
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+   hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = list(text=paste0(Variab_obj," Predicted")),
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_legend(enabled = TRUE) %>%
+        hc_exporting(enabled = TRUE,
+             filename="Model_performance") %>%  # enable export
+   hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/")
+   }
+})
+
+```
+
+SIR {data-icon="fa-cogs" data-orientation=columns data-navmenu="Models"}
+===================================================================================
+
+Column {.sidebar}
+------------------------------------------------------------------
+```{r select-input24}
+
+dateInput(inputId = 'si_5',
+          label = ' Select date',
+          value = max_date,
+          min = min_date,
+          max = max_date,
+          format="yyyy-mm-dd")
+```
+
+```{r select-input25}
+
+count_list_main<-data1 %>%
+  select(country) %>%
+  distinct(country)
+
+ count_list_main<-as.character(count_list_main$country)
+
+ selectInput(
+   inputId = 'si_count_main2', label = ' Select a Country',
+   choices = count_list_main, selected = "US")
+```
+
+```{r slider-input3}
+
+ sliderInput(inputId = 'sli_3', label = 'Parameter (a)',
+             min=0, max=3, step= 0.001, value=2.5)
+```
+
+```{r slider-input4}
+
+  sliderInput(inputId = 'sli_4', label = 'Parameter (b)',
+             min=0, max=3, step=0.001, value=0.2)
+```
+
+```{r slider-input5}
+
+  sliderInput(inputId = 'sli_5', label = 'Máx time (days)',
+             min=1, max=180, step=1, value=21)
+```
+
+```{r radio-buttons}
+
+  radioButtons(inputId = 'Rad_1', label = 'Select the graphic opcion',
+            choices=list('With susceptible & Recovered', 'Without susceptible & Recovered'),
+            selected='With susceptible & Recovered')
+```
+
+Column {data-width=650}
+------------------------------------------------------------------
+
+### **SRI Model** 
+
+```{r}
+
+renderHighchart({
+
+sir_date<-input$si_5
+#sir_date<-as.Date("2020-10-06")
+#sir_date<-as.Date(curr_date)
+
+country_sir_sel<-input$si_count_main2
+#country_sir_sel<-c("US")
+
+sir_a<-input$sli_3
+#sir_a= 2.46
+
+sir_b<-input$sli_4
+#sir_b= 0.2
+
+sir_t<-input$sli_5
+#sir_t= 14
+
+Rad_var_1<-input$Rad_1
+#Rad_var_1<-c("With susceptible & Recovered")
+
+Pob<- row_data2 %>% 
+  filter(country==country_sir_sel) %>% 
+  summarise(population)
+
+Cases_Recov_start<-data1 %>% 
+  filter(country==country_sir_sel) %>% 
+  filter(date==sir_date) %>% 
+  summarise(total_cases, total_recovered)
+
+S_start<-Pob$population-Cases_Recov_start$total_cases
+I_start<-Cases_Recov_start$total_cases
+R_start<-Cases_Recov_start$total_recovered
+
+#Población
+N<-Pob$population
+#Estado inicial
+init<-c(S=S_start, 
+        I=I_start,
+        R=R_start)
+#Parametros del modelo
+param<-c(sir_a,
+         sir_b)
+#Función con la ODE
+sir<- function(times, init, param) {
+  with(as.list(c(init, param)), {
+#Ecuaciones diferenciales
+    dS<--sir_a*S*I/N
+    dI<-sir_a*S*I/N - sir_b*I
+    dR<-              sir_b*I
+#Resultados de las tasas de cambio
+    return(list(c(dS, dI, dR)))
+  })
+}
+#Intervalo de tiempo
+  times<-seq(1, sir_t, by=1)
+#Resolucion del sistema de ecuaciones con la funcion ODE.
+  Sol<-ode(y=init, times=times, func=sir, parms=param)
+#Convertir Sol a data.frame
+  Sol<-as.data.frame(Sol)
+
+
+start_date<-ymd(sir_date)
+Vect_days<-start_date+days(1:sir_t)
+
+Sol$time<-Vect_days
+Sol$S<-round(Sol$S, digits = 0) 
+Sol$I<-round(Sol$I, digits = 0) 
+Sol$R<-round(Sol$R, digits = 0) 
+
+curr_date_sir<-as.Date(curr_date)
+
+if (sir_date==curr_date_sir){
+  
+highchart (type="stock") %>%
+  hc_add_series(data=Sol,
+               name="Susceptible",
+               type="spline",
+               color='blue',
+               hcaes(x=time, y=S)) %>%
+  hc_add_series(data=Sol,
+               name="Infected",
+               type="spline",
+               color='red',
+               hcaes(x=time, y=I)) %>%
+  hc_add_series(data=Sol,
+               name="Recovered",
+               type="spline",
+               color='green',
+               hcaes(x=time, y=R)) %>%
+  hc_title(text=paste("SRI Model for",country_sir_sel, "by days (Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+   hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = "Susceptible, Infected & Recovered",
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_legend(enabled = TRUE) %>%
+    hc_exporting(enabled = TRUE,
+                 filename="SRI_exit",
+                 formAttribute=list(target="_black"),
+                 buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+   hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,
+
+}else{
+ 
+df_cases<-data1 %>%
+   filter(country==country_sir_sel) %>%
+  filter(between(date,sir_date, curr_date_sir)) %>%
+   select(country, date, total_cases)    
+  
+  if (Rad_var_1=="With susceptible & Recovered"){
+  
+highchart (type="stock") %>%
+    hc_add_series(data=df_cases,
+               name="Real infected",
+               type="scatter",
+               color='black',
+               hcaes(x=date, y=total_cases)) %>%  
+  hc_add_series(data=Sol,
+               name="Susceptible",
+               type="spline",
+               color='blue',
+               hcaes(x=time, y=S)) %>%
+  hc_add_series(data=Sol,
+               name="Infected",
+               type="spline",
+               color='red',
+               hcaes(x=time, y=I)) %>%
+  hc_add_series(data=Sol,
+               name="Recovered",
+               type="spline",
+               color='green',
+               hcaes(x=time, y=R)) %>%
+  hc_title(text=paste("SRI Model for",country_sir_sel, "by days (Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+   hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = "Susceptible, Infected & Recovered",
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_legend(enabled = TRUE) %>%
+    hc_exporting(enabled = TRUE,
+                 filename="SRI_exit",
+                 formAttribute=list(target="_black"),
+                 buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+   hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,  
+  }else{
+    
+highchart (type="stock") %>%
+    hc_add_series(data=df_cases,
+               name="Real infected",
+               type="scatter",
+               color='black',
+               hcaes(x=date, y=total_cases)) %>%
+  hc_add_series(data=Sol,
+               name="Infected",
+               type="spline",
+               color='red',
+               hcaes(x=time, y=I)) %>%
+  hc_title(text=paste("SRI Model for",country_sir_sel, "by days (Time Serie, TS)"),
+         align="left",
+         useHTML=TRUE) %>%
+hc_subtitle(text="<i>Data source: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series",
+            align="left",
+            useHTML=TRUE) %>%
+hc_xAxis(title = list(text="time (days)"),
+           type="datetime") %>%
+   hc_yAxis(tickInterval= 1,
+            gridLineWidth= 1,
+            minorTickInterval= 0.1,
+            title = "Susceptible, Infected & Recovered",
+            labels=list(format= "{value:,.0f}"),
+            opposite=FALSE) %>%
+hc_legend(enabled = TRUE) %>%
+       hc_exporting(enabled = TRUE,
+                 filename="SRI_exit",
+                 formAttribute=list(target="_black"),
+                 buttons=list(contextButton=list(text="Export",
+                                             theme=list(fill="transparent")))) %>%  # enable export
+   hc_tooltip(shared = FALSE,
+             crosshairs=TRUE,
+             bacgroundColor="transparent") %>%
+hc_credits(enabled = TRUE, text = "Dr. Eric Cabrera Estupinan",
+            href = "http://www.htmlwidgets.org/") %>%
+hc_rangeSelector(selected = 4) %>%
+hc_navigator( #outlineColor = "gray",
+              outlineWidth = 2,
+              series = list(color = "red",
+                            lineWidth = 2,
+                            type = "areaspline", # you can change the type
+                            fillColor = "rgba(255, 0, 0, 0.2)"))#,      
+  }   
+}
+})
+
+```
+
+
+Column {data-width=350}
+------------------------------------------------------------------
+
+### **SIR Model table** 
+
+```{r}
+renderDT({
+
+sir_date<-input$si_4
+#sir_date<-as.Date("2020-09-01")
+#sir_date<-as.Date(curr_date)
+
+country_sir_sel<-input$si_count_main2
+#country_sir_sel<-c("US")
+
+sir_a<-input$sli_3
+#sir_a= 2.46
+
+sir_b<-input$sli_4
+#sir_b= 0.2
+
+sir_t<-input$sli_5
+#sir_t= 14
+
+Pob<- row_data2 %>% 
+  filter(country==country_sir_sel) %>% 
+  summarise(population)
+
+Cases_Recov_start<-data1 %>% 
+  filter(country==country_sir_sel) %>% 
+  filter(date==sir_date) %>% 
+  summarise(total_cases, total_recovered)
+
+S_start<-Pob$population-Cases_Recov_start$total_cases
+I_start<-Cases_Recov_start$total_cases
+R_start<-Cases_Recov_start$total_recovered
+
+#Población
+N<-Pob$population
+#Estado inicial
+init<-c(S=S_start, 
+        I=I_start,
+        R=R_start)
+#Parametros del modelo
+param<-c(sir_a,
+         sir_b)
+#Función con la ODE
+sir<- function(times, init, param) {
+  with(as.list(c(init, param)), {
+#Ecuaciones diferenciales
+    dS<--sir_a*S*I/N
+    dI<-sir_a*S*I/N - sir_b*I
+    dR<-              sir_b*I
+#Resultados de las tasas de cambio
+    return(list(c(dS, dI, dR)))
+  })
+}
+#Intervalo de tiempo
+  times<-seq(1, sir_t, by=1)
+#Resolucion del sistema de ecuaciones con la funcion ODE.
+  Sol<-ode(y=init, times=times, func=sir, parms=param)
+#Convertir Sol a data.frame
+  Sol<-as.data.frame(Sol)
+
+start_date<-ymd(sir_date)
+Vect_days<-start_date+days(1:sir_t)
+
+Sol$time<-Vect_days  
+Sol$S<-round(Sol$S, digits = 2) 
+Sol$I<-round(Sol$I, digits = 2) 
+Sol$R<-round(Sol$R, digits = 2) 
+
+datatable(Sol,
+          caption = "SIR Model result.",
+          rownames = T,
+          filter = "top",
+          extensions= c('Select','Buttons', 'ColReorder', 'KeyTable', 'Responsive', 'Scroller'),
+          options = list(pageLength=25,
+                         dom = 'Blfrtip',
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu=list(c(10, 25, 50, -1), c(10, 25, 50, "All")),
+                         colReorder = TRUE),
+selection = 'none')
+})
+
+```
+
+Tables {data-icon="fa-table" data-orientation=columns data-navmenu="Tables"}
+============================================================================
+Column {.sidebar}
+------------------------------------------------------------------
+```{r select-input26}
+
+count_list_main_DT<-data1 %>%
+  select(country) %>%
+  distinct(country)
+
+ count_list_main_DT<-as.character(count_list_main_DT$country)
+
+ selectInput(
+   inputId = 'si_count_DT1', label = ' Select a Country',
+   choices = count_list_main_DT, selected = "US")
+
+```
+
+Column {data-width=500}
+------------------------------------------------------------------
+### **Table 1** 
+```{r}
+
+renderDT({  
+  
+ countries_DT<-input$si_count_DT1
+#countries_DT<-c("US") 
+
+data1DT<-data1 %>% 
+  filter(country==countries_DT) %>% 
+  select(iso_code:new_recovered, region, CFR, CRR)
+ 
+datatable(select(data1DT, iso_code:new_recovered, region, CFR, CRR),
+          caption = "Main covid-19 data base.",
+          rownames = T,
+          filter = "top",
+          extensions= c('Select','Buttons', 'ColReorder', 'KeyTable', 'Responsive', 'Scroller'),
+          options = list(pageLength=25,
+                         dom = 'Blfrtip',
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu=list(c(10, 25, 50, -1), c(10, 25, 50, "All")),
+                         colReorder = TRUE),
+selection = 'none')
+  
+})
+```
+
+Column {data-width=500}
+------------------------------------------------------------------
+### **Table 2** 
+```{r}
+row_data2_DT<-row_data2
+
+row_data2_DT$country<-factor(row_data2_DT$country)
+row_data2_DT$iso_code<-as.factor(row_data2_DT$iso_code)
+row_data2_DT$region<-as.factor(row_data2_DT$region)
+row_data2_DT$income<-as.factor(row_data2_DT$income)
+row_data2_DT$year<-as.factor(row_data2_DT$year)
+
+datatable(row_data2_DT,
+          caption = "World general data",
+          rownames = T,
+          filter = "top",
+          extensions= c('Select','Buttons', 'ColReorder', 'KeyTable', 'Responsive', 'Scroller'),
+          options = list(pageLength=25,
+                         dom = 'Blfrtip',
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu=list(c(10, 25, 50, -1), c(10, 25, 50, "All")),
+                         colReorder = TRUE),
+selection = 'none')
+```
+
+
+Help
+======================================
+
+### **Information**
+
+Help to understand
+
+* Total confirmed cases: Total de personas confirmadas con la COVID-19, es un valor acumulado (nunca disminuye).
+
+* New confirmed cases: Cantidad de personas confirmadas el dia de actualizacion de los datos.
+
+* Total confirmed deaths: Total de personas confirmadas fallecidas por la COVID-19, es un valor acumulado (nunca disminuye).
+
+* New confirmed deaths: Cantidad de personas confirmadas fallecidas el dia de actualizacion de los datos.
+
+* Total confirmed recovered: Total de personas confirmadas recuperadas de la COVID-19, es un valor acumulado (nunca disminuye).
+
+* New confirmed recovered: Cantidad de personas confirmadas recuperadas el dia de actualizacion de los datos.
+
+* Case Fatality Rate CFR: Letalidad o Porciento de defunciones, CFR (%)= (confirmed deaths/ confirmed cases)* 100
+
+                          0%<= CFR <= 3%  FINE     (color green)    
+                          3%<= CFR <= 7%  AVERAGE  (color yelow)      
+                          7%<= CFR <= 10% WARNING  (color red)
+
+* Case Recovered Rate CRR: Porciento de recuperados, CRR (%)= (confirmed reovered/ confirmed cases)* 100
+
+                          0%<= CFR <= 30%   WARNING  (color red)    
+                         30%<= CFR <= 60%   AVERAGE  (color yelow)      
+                         60%<= CFR <= 100%  FINE     (color green)
+
+* TS: Time series, Series temporales.
+
+Main sites visited
+
+* https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series
+
+* https://ourworldindata.org/coronavirus-source-data
+
+* https://covid19.who.int/
+
+* https://www.arcgis.com/apps/opsdashboard/index.html#/bda7594740fd40299423467b48e9ecf6
+
+* https://www.coronavirusecuador.com/estadisticas-covid-19/
+
+* https://fict-espol.maps.arcgis.com/apps/opsdashboard/index.html#/0ade486cbd384072aee0be1099a84f5f
+
+* https://public.tableau.com/profile/direcci.n.nacional.de.vigilancia.epidemiol.gica.msp#!/vizhome/COVID19ecu_MSP_DNVE/COVID-19MSP
+
+* https://covid19cubadata.github.io/#cuba
+
+
+About report
+======================================
+
+Created by: Ing. Eric Cabrera Estupinan, PhD
+
+Docente - Investigador: Facultad de Ingeniería. Universidad Laica "Eloy Alfaro" de Manabí ULEAM. Manta (Ecuador).
+
+Especialista en Gestión de Recursos Hídricos.
+
+Teléfono: +593 99 318 9101
+
+E-mail: ecabrerae@gmail.com / eric.cabrera@uleam.edu.ec
